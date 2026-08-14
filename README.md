@@ -156,7 +156,10 @@ NO_SPEECH_SHORT = "mouth closed, closed-lip smile, never singing or talking"
 **v2.4.0 STRICT mouth-control constants.** A verified failed run (Bella, 2026-08-14) proved two things: Image-To-Video **continues whatever frame 0 contains** — no suffix can hold lips closed that start open — and the generator follows positive words ("singing", "laughing", "huge, bright smile") over any negation. So trigger words are REMOVED, closed-mouth language brackets the prompt on both sides, and an open-mouth source gets an explicit close instruction:
 
 ```
-NO_SPEECH_PREFIX = "Closed-mouth scene: the character's lips stay gently closed the entire time. "
+NO_SPEECH_PREFIX = "Narration-style scene with no lip-sync: the character never speaks or mouths
+any words, and the lips stay gently closed the entire time. "
+// v2.5.0 — "narration style" states the POSITIVE frame the generator should follow (a silent
+// character being narrated over), instead of relying only on negations it tends to ignore
 
 MOUTH_CLOSE_OPENING = "In the first moments the character softly closes the mouth into a gentle
 closed-lip smile and keeps it closed for the rest of the clip. "
@@ -176,13 +179,16 @@ SPEECH_TRIGGER_SANITIZER (case-insensitive, applied to the auto-filled action te
 NO_TRIGGER_REGEX = /\b(sing(s|ing)?|sang|talk(s|ing)?|speak(s|ing)?|chat(s|ting)?|shout(s|ing)?|chant(s|ing)?|laugh(s|ing)?|giggl(e|es|ing)|cheer(s|ing)?|yell(s|ing)?|grin(s|ning)?)\b|open[- ]?mouth|mouth open|wide smile|big smile/i
 // asserted against the SANITIZED BASE ONLY — the suffix legitimately contains these words as negations
 
-NO_SPEECH_TAIL = " No Mouth Movement or lip-sync."
-// v2.4.1, user-verified closer: appended verbatim as the literal LAST sentence of every video prompt —
-// short, imperative, and phrased in the app's own vocabulary ("lip-sync"), so it cannot be diluted
+NO_SPEECH_TAIL = " No lip-sync or mouth movement."
+// v2.5.0 user-specified closer (supersedes v2.4.1's "No Mouth Movement or lip-sync"):
+// appended verbatim as the literal LAST sentence of every video prompt — short, imperative,
+// and phrased in the app's own vocabulary ("lip-sync"), so it cannot be diluted
 ```
 
 Composition order for **every** Image-To-Video prompt (asserted in the textarea before Create Video, §9.A step 5):
-`NO_SPEECH_PREFIX` + (`MOUTH_CLOSE_OPENING` if the scene's still is open-mouth-flagged) + sanitized action text (zero `NO_TRIGGER_REGEX` matches) + `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL` — the submitted prompt must literally **end with** "No Mouth Movement or lip-sync".
+`NO_SPEECH_PREFIX` + (`MOUTH_CLOSE_OPENING` if the scene's still is open-mouth-flagged) + sanitized action text (zero `NO_TRIGGER_REGEX` matches) + `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL` — the submitted prompt must literally **end with** "No lip-sync or mouth movement".
+
+**The mouth is fixed here and ONLY here (v2.5.0).** Mouth and lip behaviour is a *video-stage* concern in every case. No storyboard is ever regenerated, re-run, or retried because of mouth pose, open mouths, visible teeth, or smiles — see §6 step 14. If clips still show lip movement, the correction is a stronger video prompt and the §9.A mouth-QC repair path, never another Artistly board.
 
 Before importing anything into VideoExpress, visually inspect every generated storyboard scene. Reject and regenerate the storyboard if the protagonist contradicts the idea or identity lock. Do not rationalize or animate a known wrong-gender or wrong-character result.
 
@@ -271,9 +277,13 @@ Open Artistly in the authenticated browser.
    - **theme match:** a coherent story progression that depicts the music's theme — the lyrics' protagonist and story arc across multiple scenes, never one generic image or an off-theme set (a mismatch fails the attempt — step 15);
    - acceptable anatomy;
    - no unwanted text, logos, or watermarks;
-   - **mouth pose (STRICT — attempt-fail criterion):** lips closed or a closed-lip smile. Zoom the montage on faces if the grid is too small to judge. Flag every still showing a wide-open mouth, parted lips with visible teeth, or a mid-word/mid-song shape — a verified failed run (Bella: 4 of 4 sampled stills open-mouth) proved these frames become talking clips at the video stage **regardless of the prompt suffix**, because Image-To-Video continues frame 0. Record the flagged scene list in `RUNTIME_STATE.json` (`open_mouth_flagged_scenes`). **If flagged stills exceed `ceil(0.10 × N)`, the attempt FAILS** (symptom `open_mouth_stills`, step 15). Every surviving flagged scene must use `MOUTH_CLOSE_OPENING` at the video stage and gets mandatory clip QC.
+   - **mouth pose (RECORD-ONLY — NEVER a reason to regenerate, v2.5.0):** lips closed or a closed-lip smile is the ideal, but an open mouth is **accepted without complaint**. Zoom the montage on faces if the grid is too small to judge. Flag every still showing a wide-open mouth, parted lips with visible teeth, or a mid-word/mid-song shape, and **record only the affected scene numbers** in `RUNTIME_STATE.json` (`open_mouth_flagged_scenes`).
 
-15. **Attempt verdict — retry / fallback decision.** If the batch passes every check above, continue to §7 with exactly this batch. If the attempt failed — explicit generation error, a single image, `N` below the viable floor, a theme mismatch, open-mouth stills above the `ceil(0.10 × N)` threshold, or an identity/ratio violation — then:
+     **Hard rule — mouth pose NEVER triggers a storyboard regeneration, re-run, retry, or attempt failure, at any count, not even if every single still is open-mouthed.** Do not re-open the Artistly agent, do not re-submit Generate Images, and do not spend one unit of the retry budget over lips, teeth, smiles, or mouth shape. Two live runs proved the loop is unwinnable: the Nursery Rhymes house style renders open-mouth joy on virtually every still, so a regenerated board fails exactly the same way and the agent spins forever while burning image quota.
+
+     The mouth is a **video-stage** problem and is solved entirely there: every flagged scene carries `MOUTH_CLOSE_OPENING` in its video prompt (on top of the prefix/suffix/tail that every scene gets), and every clip gets a recorded mouth-QC verdict with the §9.A two-stage repair for any clip that still moves its lips. If lip movement persists, strengthen the **video prompt** and re-generate **that clip** — never the board.
+
+15. **Attempt verdict — retry / fallback decision.** If the batch passes every check above, continue to §7 with exactly this batch. If the attempt failed — explicit generation error, a single image, `N` below the viable floor, a theme mismatch, or an identity/ratio violation (mouth pose is record-only and never fails an attempt) — then:
     - append a failure record to `RUNTIME_STATE.json` → `error_history` (§18 entry shape, extended with `agent`, `attempt`, `designs_returned`, `design_ids`, and the exact on-screen error message as the `symptom`) so the defect can be debugged later;
     - abandon the failed batch entirely — never import it and never mix its designs with another attempt's;
     - if Nursery Rhymes has had fewer than **3** attempts, retry Nursery Rhymes from step 1 of this section;
@@ -320,7 +330,7 @@ Use **Create with AI → Image To Video (Old Algorithm)**. Do not use the newer 
 2. Click the card whose text contains **"Image To Video"** and **"Old Algorithm"** → the "Image To Video" modal opens showing "Please select an image".
 3. Click the **"select"** link (first scene) or the **"Choose Image"** button (subsequent scenes — the modal stays open between submissions). The image picker opens.
 4. Open the **My Artistly Images** folder (single-click the `[class*="folder"]` element whose text matches; the picker resets to folder-root each time, and the folder may be below the fold — scroll the `.list-wrapper` to find it).
-5. Select the target image `.library-item[data-ident=<VE_IMAGE_ID>]`, then click **Choose**. The prompt textarea auto-fills with that image's action prompt (preserves the protagonist's pronouns/identity) — **sanitize that text, then wrap it in the closed-mouth composition (§3): prefix + (opening for flagged scenes) + sanitized base + suffix + tail, ending literally with "No Mouth Movement or lip-sync"**. Never discard the auto-filled text (that would lose the scene action and the pronouns), never leave a vocal or open-mouth trigger word in it, and never submit it bare (that is what produces talking lips).
+5. Select the target image `.library-item[data-ident=<VE_IMAGE_ID>]`, then click **Choose**. The prompt textarea auto-fills with that image's action prompt (preserves the protagonist's pronouns/identity) — **sanitize that text, then wrap it in the closed-mouth composition (§3): prefix + (opening for flagged scenes) + sanitized base + suffix + tail, ending literally with "No lip-sync or mouth movement"**. Never discard the auto-filled text (that would lose the scene action and the pronouns), never leave a vocal or open-mouth trigger word in it, and never submit it bare (that is what produces talking lips).
 
    Compose it with the native value setter so the app's model registers the change, then re-read the field to prove the prefix, suffix, and tail are all present **before** submitting:
    ```js
@@ -338,7 +348,7 @@ Use **Create with AI → Image To Video (Old Algorithm)**. Do not use the newer 
    ta.dispatchEvent(new Event('input',  {bubbles:true}));
    ta.dispatchEvent(new Event('change', {bubbles:true}));
    if (!/^Closed-mouth scene/.test(ta.value) || !/never speaks/i.test(ta.value)
-       || !/No Mouth Movement or lip-sync\.?\s*$/i.test(ta.value))
+       || !/No lip-sync or mouth movement\.?\s*$/i.test(ta.value))
      return {ok:false, why:'no-speech prefix/suffix/tail missing — aborted'};
    ```
    This also composes with the §9.A prompt-match guard: verify the auto-filled prefix matches the intended scene **first**, then sanitize and wrap. All checks must pass before Create Video.
@@ -351,7 +361,7 @@ Wrap steps 3–8 in a single function `submitScene(imageId, {boost})` and a wrap
 For the primary pass, generate exactly one normal video for every storyboard design:
 
 1. Choose the exact design from **My Artistly Images** using its recorded scene ID.
-2. Use the Artistly-provided action prompt, preserving the protagonist’s correct pronouns and identity, **then sanitize it with `SPEECH_TRIGGER_SANITIZER`, prepend `NO_SPEECH_PREFIX` (plus `MOUTH_CLOSE_OPENING` for open-mouth-flagged scenes), and append `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL`**, asserting the full composition — including the literal ending "No Mouth Movement or lip-sync" — in the textarea before submitting (§9.A step 5).
+2. Use the Artistly-provided action prompt, preserving the protagonist’s correct pronouns and identity, **then sanitize it with `SPEECH_TRIGGER_SANITIZER`, prepend `NO_SPEECH_PREFIX` (plus `MOUTH_CLOSE_OPENING` for open-mouth-flagged scenes), and append `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL`**, asserting the full composition — including the literal ending "No lip-sync or mouth movement" — in the textarea before submitting (§9.A step 5).
 3. Select **3D** unless the idea explicitly requires another supported style; never `human` for a character montage.
 4. Keep lip sync off — always, with no exception for “expressive” or “singing” scenes.
 5. Keep **Video Length Booster** off during the primary pass.
@@ -359,17 +369,15 @@ For the primary pass, generate exactly one normal video for every storyboard des
 7. Click **Create Video** exactly once for that scene.
 8. Verify a unique Processing or completed job appears in **My AI Videos** and record the generated-video ID.
 
-### Mouth-motion QC (STRICT — every clip, every batch, before it touches the timeline)
+### Mouth-motion QC (every clip, every batch, before it touches the timeline — BOUNDED, v2.5.0)
 
-Talking lips are only visible in motion, so a still thumbnail cannot prove a clip is clean. A verified failed run shipped talking clips under the old sample-only check, so **sampling is no longer allowed**:
+Talking lips are only visible in motion, so a still thumbnail cannot prove a clip is clean. Every clip is checked — but the repair path is **strictly bounded** so QC can never become its own regeneration loop (the same failure mode that made the storyboard gate unwinnable in §6 step 14).
 
-1. Watch **every completed clip in the batch** (at most 5 per batch) in the VideoExpress preview or via its `mediaPath` URL, for the clip's full length, watching the character's mouth.
+1. **Check every completed clip in the batch** (at most 5 per batch) by **frame sampling**, which covers the whole clip in seconds and needs no playback: load the clip's `mediaPath` in a `<video crossOrigin="anonymous">`, seek to ~6 points across its length (e.g. 0.2 / 0.9 / 1.6 / 2.3 / 3.0 / 3.7 s), draw each frame to a canvas cropped to the face, tile them in an overlay and screenshot once. Six frames spanning the clip reveal rhythmic lip motion reliably; full-length playback is optional and never required.
 2. Record a per-scene verdict in `RUNTIME_STATE.json` (`mouth_qc_verdicts_by_scene: {scene_k: pass | fail | fail_shipped}`) — the no-speech gate requires a verdict for **all `N` scenes**.
-3. **Reject** a clip whose lips part and re-close rhythmically, whose jaw opens and shuts, or that otherwise reads as speaking or singing. Motion of the head, hands, body, hair, and background is fine and expected. A clip from an open-mouth-flagged still that closes the mouth in the first moments and keeps it closed is a **pass**.
-4. Repair a rejected scene **in its own timeline slot** — never append the retry at the end, never let both takes sit on the timeline (§12's replacement rules apply unchanged):
-   - **Retry 1:** regenerate only that scene from the same source image with the full v2.4.0 composition — sanitized base + `NO_SPEECH_PREFIX` + `MOUTH_CLOSE_OPENING` + `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL` — enhancement off.
-   - **Retry 2:** replace the action text entirely (the **only** case where discarding the auto-filled prompt is allowed) with a minimal neutral description — subject + one non-vocal movement + setting, e.g. "Bella sways gently in her kitchen, hands resting on the dough." — wrapped in the same prefix/opening/suffix/tail.
-5. If the scene still talks after both retries, ship the least-motion take **only with the defect recorded**: an `error_history` entry, verdict `fail_shipped`, and a named exception line in the final report. Silent shipping is forbidden; the no-speech gate then passes only as "pass with listed exceptions".
+3. **Reject** a clip whose lips part and re-close rhythmically, or whose jaw opens and shuts as if speaking or singing. Motion of the head, hands, body, hair and background is fine and expected. Two things are an explicit **pass**: a clip from an open-mouth-flagged still that closes the mouth early and keeps it closed, and a clip holding a **static** open or half-open expression that never articulates — a still grin is not lip-sync, and chasing it wastes generations.
+4. **One repair attempt per scene, and only one.** Regenerate that scene **in its own timeline slot** (never appended at the end, never both takes on the timeline — §12's replacement rules apply unchanged) from the same source image, enhancement off, with the action text replaced by a minimal neutral description — subject + one non-vocal movement + setting, e.g. "Bella sways gently in her kitchen, hands resting on the dough." — wrapped in `NO_SPEECH_PREFIX` + `MOUTH_CLOSE_OPENING` + `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL`. This is the one case where discarding the auto-filled prompt is allowed; going straight to the neutral text is deliberate, since re-running the same wording rarely changes the outcome.
+5. **After that single repair, stop.** Keep the better of the two takes, record verdict `fail_shipped` plus an `error_history` entry, and name the scene in the final report. Never attempt a third generation for a scene, never restart the batch, and **never regenerate the Artistly storyboard** over lip movement — mouth control belongs to the video prompt (§3), which now ends every prompt with "No lip-sync or mouth movement". Silent shipping is still forbidden; the gate passes as "pass with listed exceptions".
 
 ### Five-generation batch system
 
@@ -509,7 +517,7 @@ Never advance without visible evidence:
 - **Import gate:** all `N` IDs exist in My Artistly Images.
 - **Batch submission gate:** every planned batch member has a unique accepted job ID; maximum five active jobs.
 - **Batch completion gate:** all current-batch jobs are complete before timeline insertion or next-batch submission.
-- **No-speech gate (STRICT):** every submitted prompt was composed `NO_SPEECH_PREFIX` + sanitized base (zero `NO_TRIGGER_REGEX` matches) + `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL` (literally ending with "No Mouth Movement or lip-sync"), with `MOUTH_CLOSE_OPENING` included for every open-mouth-flagged scene and asserted in the textarea before Create Video; automatic prompt enhancement and lip sync were off for every generation; every one of the `N` clips has a recorded mouth-QC verdict (no sampling); and any `fail_shipped` exception is listed by scene in the final report.
+- **No-speech gate (STRICT):** every submitted prompt was composed `NO_SPEECH_PREFIX` + sanitized base (zero `NO_TRIGGER_REGEX` matches) + `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL` (literally ending with "No lip-sync or mouth movement"), with `MOUTH_CLOSE_OPENING` included for every open-mouth-flagged scene and asserted in the textarea before Create Video; automatic prompt enhancement and lip sync were off for every generation; every one of the `N` clips has a recorded mouth-QC verdict (no sampling); and any `fail_shipped` exception is listed by scene in the final report.
 - **Timeline gate:** exactly `N` distinct ordered video slots exist with no gap or overlap.
 - **Audio gate:** one exact music item begins at zero on track 2.
 - **Sync gate:** audio and video endpoints are equal with zero-pixel tolerance.
@@ -542,10 +550,10 @@ Recovery rules:
 - Never accept a protagonist whose gender or identity contradicts the idea.
 - Never mix Landscape and Vertical media.
 - Never use the newer Image to Video option when the workflow requires the Old Algorithm.
-- Never enable lip sync, never use the Lipsync Video tool, and never submit a video prompt that lacks `NO_SPEECH_PREFIX` and `NO_SPEECH_SUFFIX` or does not end with `NO_SPEECH_TAIL` ("No Mouth Movement or lip-sync").
+- Never enable lip sync, never use the Lipsync Video tool, and never submit a video prompt that lacks `NO_SPEECH_PREFIX` and `NO_SPEECH_SUFFIX` or does not end with `NO_SPEECH_TAIL` ("No lip-sync or mouth movement").
 - Never enable automatic video-prompt enhancement — it rewrites the prompt server-side and can strip the no-speech language.
 - Never submit a video prompt whose base text still contains a vocal or open-mouth trigger word (`NO_TRIGGER_REGEX`).
-- Never animate a storyboard whose open-mouth stills exceed `ceil(0.10 × N)` — that attempt fails; regenerate instead.
+- Never fail or regenerate a storyboard attempt for mouth pose alone — record only the affected scenes in `open_mouth_flagged_scenes`, and never animate a flagged scene without `MOUTH_CLOSE_OPENING` in its video prompt.
 - Never skip the per-clip mouth-motion QC — every clip gets a recorded verdict before timeline insertion.
 - Never ship a clip whose character visibly talks or sings; repair it in its own slot instead.
 - Never add a still-processing video to the timeline.
@@ -598,7 +606,7 @@ Numeric folder `categoryId`s and media/design `id`s are **per-account**; the val
 - Right sidebar tabs are `<a>` links: `Media Library`, `Create with AI`, `Import Media … Text to Speech`, `Text Animations`, `Filters`, `Fast Cut`, `Automatic Captions`, `Audio Cutter` (click the `<a>`, not its label span).
 - Import panels: cards are `.panel.cursor-pointer` (match by text `Import from Artistly` / `Import from CloneVoice.ai`). Grid items `.library-item[data-ident]` inside `.col-xs-6.item`; `data-image` = URL, `title` = prompt; select by clicking the `.library-item` (adds `selected`); `More` button paginates (~20/page); submit buttons `Import` / `button.button-import` "Import Selected" (jQuery-trigger).
 - Folders API: `GET /api/library/get_media/4?categoryId=<ID>&page=1&limit=50&orderBy=id&orderDir=desc&filter=<image|>` → `{total, results:[{id,name,title,status,duration}]}`. Example ids: My Artistly Images `376019` (filter=image), My AI Videos `54109`, My CloneVoice.ai Audio `552829`. Outputs list: `GET /api/get_list_output`.
-- Image-To-Video (Old Algorithm) modal: image picker `select`/`Choose Image` → folder → `.library-item[data-ident]` → `Choose`; prompt textarea auto-fills — **compose sanitized base + `NO_SPEECH_PREFIX`/`MOUTH_CLOSE_OPENING`/`NO_SPEECH_SUFFIX`/`NO_SPEECH_TAIL` via the native value setter + `input`/`change`, and assert prefix, suffix, the literal ending "No Mouth Movement or lip-sync", and zero trigger words before submitting** (§9.A step 5); `select[name="select-type"]`(=`3d`, never `human` — the dropdown defaults to Human, set it every time); `input[name="video_length_booster"]`; any lip-sync toggle AND any enhance-prompt toggle stay unchecked; `Create Video` button. Job durations: normal `4041.667 ms`, boosted `8041.667 ms`.
+- Image-To-Video (Old Algorithm) modal: image picker `select`/`Choose Image` → folder → `.library-item[data-ident]` → `Choose`; prompt textarea auto-fills — **compose sanitized base + `NO_SPEECH_PREFIX`/`MOUTH_CLOSE_OPENING`/`NO_SPEECH_SUFFIX`/`NO_SPEECH_TAIL` via the native value setter + `input`/`change`, and assert prefix, suffix, the literal ending "No lip-sync or mouth movement", and zero trigger words before submitting** (§9.A step 5); `select[name="select-type"]`(=`3d`, never `human` — the dropdown defaults to Human, set it every time); `input[name="video_length_booster"]`; any lip-sync toggle AND any enhance-prompt toggle stay unchecked; `Create Video` button. Job durations: normal `4041.667 ms`, boosted `8041.667 ms`.
 - Timeline: `.tracks-wrapper .track-row[0]` = video track 1, `[1]` = audio track 2. Clips `.brick.video`/`.brick.audio` with inline `style.left`/`style.width` (px). Clip jQuery events include `ctxmenu:delete`, `ctxmenu:resize_move`. Zoom buttons `button:has(i.bi-zoom-out)` / `i.bi-zoom-in`. Cut tool `button:has(i.bi-scissors)`. Ruler playhead slider `.timeline-header .ruler.ui-slider` (`$(r).slider('value')` in px). Auto-align link title `Auto Align Clips`.
 - Add-to-timeline = jQuery-UI drag (not synthetic menu click). Delete = `$(brick).trigger('ctxmenu:delete')`. Exact trim = playhead-slider + Cut + tail `ctxmenu:delete` (§0.5).
 - Save dialog `input[name="project_name"]` + `button.button-submit`; success = `document.title` = `"Video Express - <name>"`.
@@ -636,5 +644,5 @@ Write `RUNTIME_STATE.json` beside the workflow after every verified side effect,
 8. Respect ≤5 concurrent generations; pipeline the next batch while assembling the current one.
 9. Guard against stacked dialogs; act once, verify, close duplicates.
 10. Persist a concrete, human-readable checkpoint after every side effect for resumability and support.
-11. **Characters act, they never speak — and the mouth is controlled at the IMAGE first.** An open-mouth still becomes a talking clip no matter what the prompt says (frame 0 wins), so closed-mouth stills are a storyboard gate (flagged > `ceil(0.10 × N)` fails the attempt). Every video prompt is sanitized of vocal trigger words, then wrapped `NO_SPEECH_PREFIX` … `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL` — always ending literally with "No Mouth Movement or lip-sync" (plus `MOUTH_CLOSE_OPENING` for flagged scenes); `NO_SPEECH_SHORT` leads the Storyboard Style prompt; lip sync AND prompt enhancement stay off, style `3d` (never `human`); and every clip — not a sample — gets a recorded mouth-QC verdict. The vocal belongs to the CloneVoice track alone — a mouth that moves reads as broken dubbing.
+11. **Characters act, they never speak — and the mouth is controlled at the IMAGE first.** An open-mouth still becomes a talking clip unless countered (frame 0 wins), so every open-mouth still is recorded per scene (`open_mouth_flagged_scenes`, record-only — never regenerate a board for mouth pose alone) and closed at the video stage via `MOUTH_CLOSE_OPENING`. Every video prompt is sanitized of vocal trigger words, then wrapped `NO_SPEECH_PREFIX` … `NO_SPEECH_SUFFIX` + `NO_SPEECH_TAIL` — always ending literally with "No lip-sync or mouth movement" (plus `MOUTH_CLOSE_OPENING` for flagged scenes); `NO_SPEECH_SHORT` leads the Storyboard Style prompt; lip sync AND prompt enhancement stay off, style `3d` (never `human`); and every clip — not a sample — gets a recorded mouth-QC verdict. The vocal belongs to the CloneVoice track alone — a mouth that moves reads as broken dubbing.
 12. Make **Auto Align Clips** the last arrangement action, then re-measure geometry — the click is not proof.

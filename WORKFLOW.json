@@ -1,0 +1,1398 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "config_version": "2.5.0",
+  "config_changelog": "2.5.0: Mouth control moved entirely to the VideoExpress video prompt at user instruction. (a) The storyboard mouth-pose check is now RECORD-ONLY as a hard rule - mouth pose can never cause a storyboard regeneration, re-run, retry or attempt failure at any count, and open-mouth stills are accepted without complaint (the previous behaviour still left the agent re-generating boards in Artistly, which is unwinnable because the Nursery Rhymes house style is open-mouthed on nearly every still); mouth-related entries were removed from storyboard_attempt_validation.fail_conditions. (b) The terminal tail phrase is now the user-specified 'No lip-sync or mouth movement.' (was 'No Mouth Movement or lip-sync.'), still asserted as the literal ending of every video prompt before Create Video. (c) no_speech_prompt_prefix now opens with the positive narration framing 'Narration-style scene with no lip-sync: the character never speaks or mouths any words...' because generators follow positive framing over bare negation. The video is narration style: the only vocal is the CloneVoice track and characters never lip-sync. | 2.4.2: Storyboard mouth-pose gate demoted from attempt-fail to RECORD-ONLY after live-run feedback: the >ceil(0.10*N) threshold made the workflow regenerate the storyboard again and again (the Nursery Rhymes house style renders open-mouth joy on virtually every still, so a regenerated board fails the same gate). Open-mouth stills no longer fail an attempt and no longer consume the agent retry budget; montage QC now records ONLY the affected scene numbers into RUNTIME_STATE.json open_mouth_flagged_scenes, and the mouth is closed at the video stage instead (mouth_close_opening for every flagged scene + suffix/tail + per-clip mouth QC). All other attempt-fail conditions (explicit error, single image, viable floor, theme mismatch, identity/ratio violation) unchanged. | 2.4.1: Added the user-verified terminal tail phrase. Every Image-To-Video prompt now ENDS with the literal sentence 'No Mouth Movement or lip-sync' (inputs.videoexpress.no_speech_prompt_tail), appended after no_speech_prompt_suffix and enforced with an ends-with assert before Create Video. Also documented from the live modal that the style dropdown DEFAULTS to Human - '3d' must be explicitly set for every submission. | 2.4.0: STRICT closed-mouth overhaul after a verified failed run (2026-08-14 'Bella' storyboard) still produced talking lips. Investigation evidence: 4 of 4 sampled source stills had a wide-open mouth with visible teeth, so Image-To-Video animated speech regardless of the appended suffix (frame 0 wins - a suffix cannot hold closed what starts open); action prompts contained vocal/open-mouth wording ('huge, bright smile'); automatically_enhance_video_prompt was true, letting the server-side enhancer rewrite away the no-speech language; and mouth QC was sample-only, so talking clips shipped. Fixes: (a) mouth pose is now a storyboard attempt-validation FAIL condition - more than ceil(0.10*N) flagged open-mouth stills fail the attempt, and the flagged scene list is always recorded; (b) every video prompt is composed sanitize -> no_speech_prompt_prefix -> mouth_close_opening (flagged scenes only) -> base -> no_speech_prompt_suffix, with speech_trigger_sanitizer REMOVING vocal/open-mouth trigger words (a generator follows 'singing' over any negation) and a no-trigger assert before Create Video; (c) automatically_enhance_video_prompt is now false and asserted off; (d) mouth-motion QC watches EVERY clip with per-scene recorded verdicts, a two-stage repair retry, and no silent shipping of a talking clip. | 2.3.0: Hardened storyboard agent selection with priority, validated retries, and a fallback. Nursery Rhymes is now the HIGH-priority agent and is always tried first; Music Storyboard is the LOW-priority fallback. Reason: Nursery Rhymes sometimes returns an error or generates only ONE image instead of a full storyboard. Every attempt is now validated before import: the batch must be a full multi-scene storyboard (never a single image; N >= ceil(audio_seconds/8.0417) so the clips can span the song) whose scenes match the music theme/lyrics and the locked identity. Nursery Rhymes gets up to 3 validated attempts; every failed attempt is appended to RUNTIME_STATE.json error_history with the agent, attempt number, exact error message/symptom, and design ids so the defect can be debugged later, and the failed batch is abandoned (never imported, never mixed with another attempt). After the third failure, Music Storyboard runs with the character-lock prompt, also with up to 3 validated attempts; 6 total logged failures are a reported true blocker. | 2.2.0: Fixed a talking-lips defect found on playback. Characters were animating their mouths as if speaking/singing, which reads as broken dubbing in a montage whose only vocal is the CloneVoice track. Root cause: the Image-To-Video prompt was used exactly as auto-filled and never said the character must not speak, so the model defaulted to singing motion on a music video (worsened when the source still already had an open mouth). Fix applied at three levels: (a) no_speech_prompt_suffix is now APPENDED to every auto-filled video prompt and asserted in the textarea before Create Video; (b) no_speech_prompt_suffix_short goes into the Artistly Storyboard Style prompt so the source stills are closed-mouth; (c) added per-batch mouth_motion_qc plus a no_speech_gate, same-slot repair rules, animation style pinned to '3d' (never 'human'), and lip-sync enforcement. Also documented Auto Align Clips as the final arrangement action with mandatory geometry re-verification. | 2.1.0: Fixed a lyric-sync defect found on playback. The 2.0.0 'boost the last K scenes' placement kept endpoints equal but clustered short clips first, so the picture ran up to ~19s ahead of the lyrics through the first half. Replaced with EVEN distribution of boosted clips (running-total rule tracking k*(A/N)); added pacing_sync_gate and per-scene drift audit. | 2.0.0: Hardened from a verified end-to-end successful run. Added device-agnostic execution_mechanics (DOM-selector + event dispatch, never screenshot pixels), dom_api_contract (exact selectors/APIs/durations/confirmation strings), validation_checkpoints and support_investigation blocks. Corrected add-to-timeline to jQuery-UI drag, delete to ctxmenu:delete, music-import to jQuery trigger, exact-trim to playhead-slider+cut+tail-delete, Nursery Rhymes agent specifics.",
+  "automation": {
+    "name": "CloneVoice Artistly VideoExpress Nursery Rhymes Music Video",
+    "enabled": true,
+    "run_mode": "manual",
+    "trigger_phrase": "Generate nursery rhymes music video",
+    "timezone": "Asia/Dhaka",
+    "browser": {
+      "preferred_browser": "chrome",
+      "use_existing_authenticated_session": true,
+      "start_url": "https://app.clonevoice.ai/music/create",
+      "required_authenticated_apps": [
+        "https://app.clonevoice.ai/",
+        "https://app.artistly.ai/",
+        "https://app.videoexpress.ai/"
+      ],
+      "stop_if_sign_in_is_required": true
+    },
+    "execution_contract": {
+      "terminal_condition": "videoexpress_final_export_background_queue_confirmation_visible",
+      "execution_model": "checkpointed_resumable_state_machine",
+      "resume_from_last_verified_checkpoint": true,
+      "never_restart_completed_work": true,
+      "reconcile_external_state_before_every_retry": true,
+      "persist_state_after_every_external_side_effect": true,
+      "pending_generation_is_terminal": false,
+      "continue_without_user_wakeup": true,
+      "active_loading_has_no_hard_timeout": true,
+      "inspection_checkpoint_is_not_a_deadline": true,
+      "forbidden_while_job_is_pending": [
+        "send_final_answer",
+        "declare_blocked",
+        "declare_timeout",
+        "yield_to_user",
+        "ask_user_to_reply_ready",
+        "ask_user_to_reply_continue",
+        "ask_user_to_watch_the_tab"
+      ],
+      "true_blocking_conditions": [
+        "explicit_generation_failure_message",
+        "authentication_required",
+        "captcha_or_human_verification_required",
+        "payment_credits_or_account_access_required",
+        "required_api_integration_is_missing",
+        "browser_session_closed_disconnected_or_uncontrollable",
+        "required_audio_download_or_upload_is_rejected_by_the_browser",
+        "loading_disappeared_without_result_after_one_safe_refresh_and_three_consecutive_inspections"
+      ],
+      "not_a_blocker": [
+        "mcp_or_api_write_returns_419_page_expired_or_csrf_error_use_authenticated_browser_dom_instead",
+        "visible_processing_percentage_or_spinner",
+        "stale_toast_text_verify_via_authoritative_signal_instead"
+      ]
+    },
+    "execution_mechanics": {
+      "principle": "All three apps are jQuery + Inertia SPAs whose CSS layout moves with screen size, zoom, and browser-pane scaling. Locate and act on every control by DOM selector (text, name, class, or data-ident) plus JavaScript event dispatch. NEVER click actionable controls by screenshot pixel coordinates. Screenshots are only for human-visible verification and image QC (girl-vs-boy, reading a toast, montage review).",
+      "device_agnostic": true,
+      "forbidden": [
+        "clicking_actionable_controls_by_screenshot_pixel_coordinates",
+        "hardcoding_element_x_y_positions",
+        "assuming_a_fixed_viewport_or_devicepixelratio",
+        "trusting_a_toast_alone_as_proof",
+        "hardcoding_per_account_numeric_ids_across_users"
+      ],
+      "interaction_primitives": {
+        "native_mouse_sequence": {
+          "use_for": "normal buttons, links, toggles, and dialog Save/Create where jQuery trigger is flaky",
+          "recipe": "const r=el.getBoundingClientRect(); ['mousedown','mouseup','click'].forEach(t=>el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window,clientX:r.x+r.width/2,clientY:r.y+r.height/2,button:0})));",
+          "note": "clientX/clientY come from getBoundingClientRect so it self-adjusts to any screen size."
+        },
+        "jquery_trigger": {
+          "use_for": "delegated handlers that ignore a plain synthetic click",
+          "recipe": "const $=window.jQuery||window.$; $(el).trigger('click'); or custom events like $(brick).trigger('ctxmenu:delete');",
+          "verified_cases": [
+            "button.button-import Import Selected",
+            "clip ctxmenu:delete",
+            "Cut tool bi-scissors",
+            "Save Project As link",
+            "export Create"
+          ]
+        },
+        "jquery_ui_drag": {
+          "use_for": "drag-and-drop: add video clips to timeline, place audio on track 2",
+          "recipe": "mousedown on source element, then several document mousemove events (clientX/clientY) stepping toward the drop target rect center, then mouseup at target. jQuery-UI listens on document for move/up.",
+          "note": "Zoom the timeline out first so the drop point stays on-screen; an off-screen drop silently fails."
+        },
+        "select_value": {
+          "use_for": "native <select> dropdowns (VideoExpress style, quality, size, format; CloneVoice music-type)",
+          "recipe": "select.value = optionValue; select.dispatchEvent(new Event('change',{bubbles:true}));"
+        },
+        "file_upload_without_os_dialog": {
+          "use_for": "Artistly FilePond audio upload",
+          "recipe": "fetch(cdnUrl) -> blob -> new File([blob],name,{type}) -> DataTransfer -> input.files -> input.dispatchEvent(new Event('change',{bubbles:true})). CloneVoice CDN mp3 URLs are public and CORS-open.",
+          "target_selector": "input[type=file][name=\"filepond\"]"
+        }
+      },
+      "state_reading_prefers_api": "Verify gates from app APIs, not by toggling panels and screenshotting. See dom_api_contract.read_apis.",
+      "stacked_dialog_rule": "Triggering an action twice (native click + jQuery trigger) can open duplicate stacked modals. Act on exactly one, verify success by an authoritative signal (document.title / queue text / API record), then close leftover duplicates. Detect duplicates by counting matching inputs/buttons.",
+      "timeline_geometry": {
+        "rows": ".tracks-wrapper .track-row (index 0 = video track 1, 1 = audio track 2, 2 = track 3)",
+        "clips": ".brick.video / .brick.audio with inline style.left and style.width in pixels",
+        "endpoint_formula": "end_px = parseFloat(left) + parseFloat(width)",
+        "render_rounding_gaps": "1px gaps that recur ~every 5 clips are rendering round-off of contiguous model times, NOT real gaps; the export renders from model times and is gapless. Only larger non-recurring gaps are real."
+      },
+      "exact_trim_method": {
+        "why": "jQuery-UI resizable does NOT respond to synthetic events, so dragging a clip's resize handle fails.",
+        "steps": [
+          "playhead is the ruler slider: .timeline-header .ruler.ui-slider; $(ruler).slider('value') is the playhead position in PIXELS (0..visible-track-width)",
+          "set $(ruler).slider('value', audioEndPx) and trigger slide/slidechange/change so the app seeks",
+          "select the last video clip, then trigger the Cut tool button:has(i.bi-scissors) via $(cut).trigger('click') to split at the playhead",
+          "delete the small tail brick right of the playhead via $(tail).trigger('ctxmenu:delete')",
+          "re-measure until video_end_px == audio_end_px (0-pixel difference). Same px->time conversion for both makes the match exact regardless of rounding."
+        ]
+      },
+      "zoom_controls": {
+        "zoom_out": "button whose child is i.bi-zoom-out",
+        "zoom_in": "button whose child is i.bi-zoom-in",
+        "guidance": "Zoom out until all N clips fit before assembling and before endpoint work; a fit zoom renders a normal clip ~20px and a boosted clip ~40px."
+      }
+    },
+    "resume_state": {
+      "enabled": true,
+      "state_file": "RUNTIME_STATE.json",
+      "state_file_location": "same directory as WORKFLOW.json",
+      "write_policy": "Write atomically after every verified action, submission, completion, import, timeline mutation, save, and export-queue submission.",
+      "load_policy": "At workflow start or after any interruption, load RUNTIME_STATE.json before opening or changing an application. If the file is absent, initialize a new run. If present, reconcile it with visible application state and resume at current_step/current_substep.",
+      "status_values": [
+        "not_started",
+        "in_progress",
+        "submitted",
+        "processing",
+        "completed",
+        "verified",
+        "failed",
+        "needs_user_action"
+      ],
+      "required_fields": [
+        "run_id",
+        "workflow_config_version",
+        "started_at",
+        "updated_at",
+        "current_phase",
+        "current_step",
+        "current_substep",
+        "current_status",
+        "last_verified_checkpoint",
+        "next_safe_action",
+        "completed_steps",
+        "external_side_effects",
+        "clonevoice",
+        "artistly",
+        "videoexpress",
+        "error_history"
+      ],
+      "application_state": {
+        "clonevoice": [
+          "music_name",
+          "audio_id",
+          "generation_status",
+          "downloaded_audio_path"
+        ],
+        "artistly": [
+          "uploaded_audio_name",
+          "storyboard_tool",
+          "storyboard_attempt",
+          "storyboard_attempt_history",
+          "agent_fallback_triggered",
+          "character_lock_prompt",
+          "character_identity_verified",
+          "storyboard_generation_started",
+          "storyboard_scene_count",
+          "storyboard_scene_ids_in_order",
+          "completed_scene_ids"
+        ],
+        "videoexpress": [
+          "project_name",
+          "artistly_imported_scene_ids",
+          "current_batch_number",
+          "current_batch_scene_ids",
+          "submitted_scene_ids",
+          "completed_video_ids_by_scene",
+          "open_mouth_flagged_scenes",
+          "mouth_qc_verdicts_by_scene",
+          "mouth_qc_exceptions",
+          "timeline_scene_ids_in_order",
+          "target_timeline_scene_count",
+          "boosted_scene_ids",
+          "normal_scene_ids",
+          "music_imported",
+          "music_timeline_count",
+          "music_track",
+          "music_start_time",
+          "original_video_clip_count",
+          "duration_audio_endpoint",
+          "duration_video_endpoint",
+          "duration_missing",
+          "duration_booster_batch_number",
+          "duration_booster_source_scene_ids",
+          "duration_booster_submitted_video_ids",
+          "duration_booster_completed_video_ids",
+          "duration_booster_added_video_ids",
+          "timeline_has_no_gaps",
+          "timeline_has_no_overlaps",
+          "duration_endpoints_equal",
+          "project_saved",
+          "export_submission_id",
+          "export_queue_position"
+        ]
+      },
+      "checkpoint_key_format": "phase.step.substep.entity_id",
+      "idempotency_rule": "Before any action that can create, import, add, save, or export something, check both the checkpoint and the visible application state. If the intended result already exists, mark the action verified and advance without repeating it.",
+      "resume_rule": "Resume from next_safe_action. Never infer that the whole phase must restart merely because the browser tab, control session, or process was interrupted."
+    },
+    "resume_protocol": [
+      {
+        "order": 1,
+        "action": "load_runtime_state",
+        "details": "Load RUNTIME_STATE.json and validate run_id, config version, current phase, current step, completed steps, entity IDs, and next_safe_action."
+      },
+      {
+        "order": 2,
+        "action": "reconnect_without_mutation",
+        "details": "Reconnect to the existing authenticated applications. Do not click Generate, Import, Add to Timeline, Save, Create, or Delete during reconnection."
+      },
+      {
+        "order": 3,
+        "action": "inspect_authoritative_state",
+        "details": "Inspect the exact named item, ID, folder, batch, timeline, saved project, or export queue associated with the checkpoint. Prefer stable IDs; use exact titles plus timestamps and thumbnails only when IDs are unavailable."
+      },
+      {
+        "order": 4,
+        "action": "reconcile_checkpoint",
+        "details": "If the expected result exists, update the checkpoint to verified and advance. If an action was submitted and is processing, continue waiting. If it is absent, retry only that current action. Never repeat previously verified actions."
+      },
+      {
+        "order": 5,
+        "action": "persist_reconciled_state",
+        "details": "Atomically save the corrected runtime state before continuing with next_safe_action."
+      }
+    ],
+    "stuck_detection": {
+      "definition": "The same current_step/current_substep shows no visible progress and no authoritative status change across three consecutive inspections, while no normal processing indicator is active.",
+      "normal_processing_is_not_stuck": true,
+      "inspection_sequence": [
+        "inspect the current dialog, item status, folder, timeline, or queue",
+        "wait the configured poll interval",
+        "inspect the same authoritative surface again",
+        "perform one safe refresh or close-and-reopen of only the current panel",
+        "inspect a third time and reconcile with the checkpoint"
+      ],
+      "recovery_sequence": [
+        "record the stuck observation in error_history",
+        "preserve current_step, current_substep, entity IDs, batch membership, and next_safe_action",
+        "reconnect or reopen only the affected panel or saved project",
+        "reconcile external state before retrying",
+        "retry only the smallest unverified action once",
+        "continue waiting when an item is processing",
+        "request user action only for authentication, CAPTCHA, credits, permissions, or an explicit unrecoverable application error"
+      ],
+      "forbidden_recovery_actions": [
+        "restart the workflow from step 1",
+        "regenerate completed music",
+        "regenerate a completed storyboard",
+        "reimport all media when only some items are missing",
+        "resubmit completed scene videos",
+        "rebuild a verified timeline from scratch",
+        "click export Create again without checking the queue"
+      ]
+    },
+    "corner_case_handling": {
+      "browser_control_interrupted": "Persist or preserve the last checkpoint, reconnect to the same tab when possible, or open a clean authenticated tab and reopen the saved VideoExpress project. Reconcile account-level media and timeline state, then resume next_safe_action.",
+      "browser_tab_closed": "Open the application again, load the exact named saved project or account-level item, reconcile IDs and status, and continue from the checkpoint.",
+      "page_reload_during_form_entry": "Restore only unsaved fields for current_substep from runtime state. Do not repeat earlier submitted steps.",
+      "clonevoice_generation_submitted_without_completion": "Open My Audio, find the exact music_name and audio_id, and wait while Processing. Click Generate Music only if no matching submitted item exists.",
+      "clonevoice_completed_before_checkpoint_write": "Find the exact completed title, capture its audio_id, mark generation completed, and continue with download without regenerating.",
+      "music_download_interrupted": "Check downloaded_audio_path and file size. Reuse a valid existing file; otherwise download only the exact completed item again.",
+      "artistly_upload_interrupted": "Inspect the upload control for the expected file name. If already uploaded, continue. Otherwise retry only the file upload.",
+      "artistly_storyboard_partially_completed": "Keep the same storyboard job open and wait for remaining scene IDs. Never start a second storyboard job while a matching one exists. If the browser reconnects, open Personal Designs, filter by the recorded storyboard_tool, find the matching job by timestamp and first image, and continue inspection without resubmitting.",
+      "artistly_nursery_rhymes_error_or_single_image": "Known Nursery Rhymes defect: an attempt sometimes ends in an explicit error or produces only ONE image instead of a full storyboard. This is a failed attempt, not a blocker. Append an error_history entry (support_investigation.error_history_entry_shape extended with agent, attempt, designs_returned, design_ids; symptom = the exact on-screen error message or 'single_image') for later debugging, abandon that batch entirely (never import it, never mix it with another attempt's designs), and retry Nursery Rhymes up to 3 validated attempts total. Only after the third failure switch to the Music Storyboard fallback with the character-lock prompt (the fallback also gets up to 3 validated attempts; 6 total logged failures are a reported true blocker).",
+      "artistly_character_hallucination": "Reject the storyboard before VideoExpress import when the named protagonist's gender, age, role, clothing, hair, or other locked identity attributes disagree with the song brief. The rejection counts as a failed attempt under inputs.artistly.agent_priority: record it in error_history, retry Nursery Rhymes while it has had fewer than 3 attempts, then fall back to Music Storyboard with one compact immutable character-lock prompt and visually verify every generated scene. Never animate a known wrong-gender or wrong-character storyboard.",
+      "artistly_import_partially_completed": "Compare storyboard IDs with My Artistly Images and import only missing scene IDs while preserving storyboard order.",
+      "scene_batch_partially_submitted": "Keep the same batch open. Read its planned_scene_ids, submitted_scene_ids, and My AI Videos. Submit only missing members until every scene in the current batch has one authoritative processing or completed job. A confirmation banner alone is insufficient; verify each accepted job in My AI Videos. Never fill a rejected slot with a scene from the next batch.",
+      "scene_batch_partially_completed": "Wait for remaining submitted scenes. Add no partial batch to the timeline unless the runtime checkpoint explicitly records each completed insertion position and idempotency can be guaranteed.",
+      "scene_added_before_checkpoint_write": "Inspect timeline_scene_ids_in_order. If the scene already occupies the intended slot, record it and do not add it again.",
+      "scene_missing_from_timeline": "Restore only the exact missing clip at its original sequential position. Do not remove or shift other video clips.",
+      "scene_duplicate_on_timeline": "Identify duplicates by scene-to-video mapping and remove only the extra duplicate after confirming the correct copy and position. Never delete an adjacent nonmatching clip.",
+      "scene_order_uncertain": "Stop timeline mutation, compare stable IDs, prompt titles, thumbnails, and neighboring scenes, then persist the resolved order before continuing.",
+      "audio_imported_before_checkpoint_write": "Inspect My CloneVoice.ai Audio for the exact title. Mark it imported when present; do not import it again.",
+      "audio_misplaced_or_duplicated": "Remove only misplaced or duplicate audio bricks, never video bricks. Drag one exact music item to track 2 at 00:00:00 and verify the audio-brick count is exactly one.",
+      "audio_video_duration_mismatch": "Record exact video and audio endpoints and their difference. Keep timeline video count equal to Artistly's verified storyboard count N. If audio is longer, resume the duration-matching replacement loop: replace only selected normal versions with boosted versions in the same slots. If audio is shorter, trim only clip right edges as configured; never remove a storyboard scene or change the N-clip invariant.",
+      "duration_booster_batch_partially_submitted": "Inspect My AI Videos and runtime submitted IDs. Do not resubmit scenes whose generation already exists. Submit only the missing members until the current batch contains at most five jobs, then wait for that batch.",
+      "duration_booster_batch_partially_completed": "Keep the completed boosted results recorded and continue waiting for processing members. Add nothing until all submitted members needed for the current placement decision are completed.",
+      "boosted_clip_already_on_timeline_before_checkpoint": "Match the generated-video ID, prompt-derived name, thumbnail, and timeline brick. If it already occupies its source scene's intended slot and the original is absent, record the replacement and advance. If both original and boosted versions are present, remove only the original duplicate after verifying both mappings; never leave both copies on the timeline.",
+      "duration_match_overshoots_audio": "Keep exactly one version of every selected scene. Resize only the right edge of the final boosted replacement until video_end equals audio_end; never trim or move the music and never increase the clip count.",
+      "duration_match_has_gap_or_overlap": "Sort video bricks by left position, find the first boundary where next_start differs from previous_end, and adjust only the affected newly added boosted boundary. Re-audit the full ordered sequence before saving.",
+      "rounded_duration_label_disagrees_with_timeline": "Treat exact timeline brick geometry as authoritative. Compute each endpoint as left plus width and require zero-pixel difference; rounded 1:50 labels alone are insufficient.",
+      "project_save_interrupted": "Open the project list and look for the exact project name and latest expected timestamp. If present, reopen and verify the timeline; otherwise save the current verified timeline once.",
+      "export_create_interrupted": "Inspect My Videos or the export queue for the exact export filename before clicking Create again. If queued or rendering, record the position/status and do not resubmit.",
+      "runtime_state_file_corrupt": "Do not restart automatically. Reconstruct state read-only from exact titles, IDs, account folders, saved project timeline, and export queue; write a recovered checkpoint and resume from the first unverified action.",
+      "runtime_state_and_ui_disagree": "Treat stable application IDs and visible authoritative status as truth, update the runtime checkpoint with an audit entry, and continue from the reconciled next_safe_action.",
+      "mouth_qc_failed_after_the_single_repair": "v2.5.0: keep the better of the two takes in the scene's own slot, set mouth_qc_verdicts_by_scene[scene]=fail_shipped, append an error_history entry, and list the scene as a named exception in the final report. Do NOT generate a third take, do NOT restart the batch, and do NOT regenerate the storyboard - mouth control lives in the video prompt, which ends with 'No lip-sync or mouth movement'."
+    },
+    "inputs": {
+      "project_name": "{{PROJECT_NAME}}",
+      "video_ratio": "Landscape",
+      "audio": {
+        "lyrics_mode": "AI-Generated",
+        "song_idea": "{{CLONEVOICE_SONG_IDEA}}",
+        "style": "{{CLONEVOICE_MUSIC_STYLE}}",
+        "language": "English",
+        "music_name": "{{MUSIC_NAME}}",
+        "download_directory": "{{LOCAL_DOWNLOAD_DIRECTORY}}"
+      },
+      "artistly": {
+        "agent": "Nursery Rhymes",
+        "agent_options": [
+          "Nursery Rhymes",
+          "Music Storyboard"
+        ],
+        "agent_priority": [
+          {
+            "agent": "Nursery Rhymes",
+            "priority": "high",
+            "max_validated_attempts": 3
+          },
+          {
+            "agent": "Music Storyboard",
+            "priority": "low",
+            "use_only_after": "3_failed_nursery_rhymes_attempts",
+            "max_validated_attempts": 3
+          }
+        ],
+        "agent_selection_rule": "ALWAYS try Nursery Rhymes first (HIGH priority). Known defect: it sometimes returns an error or generates only ONE image instead of a full storyboard. Validate every attempt with storyboard_attempt_validation before import; on failure, append the attempt to RUNTIME_STATE.json error_history for later debugging and retry Nursery Rhymes, up to 3 validated attempts total. Fall back to Music Storyboard (LOW priority) only after the third failed Nursery Rhymes attempt; Music Storyboard then gets up to 3 validated attempts of its own under the same validation and error_history logging. If both agents exhaust their 3 attempts (6 logged failures), stop and report a true blocker with the error_history evidence instead of importing a failed batch. Nursery Rhymes has NO character-prompt field so identity must already be in the CloneVoice lyrics, and its dimension defaults to 1:1 and MUST be set to the selected ratio. Music Storyboard requires the explicit typed character-lock prompt.",
+        "storyboard_attempt_validation": {
+          "run_after_every_generation_attempt": true,
+          "fail_conditions": [
+            "the app shows an explicit generation error for this attempt",
+            "the batch contains exactly one design (a single image instead of a storyboard - the known Nursery Rhymes failure)",
+            "scene count is below the viable floor ceil(audio_seconds / 8.0417) - below it even all-boosted clips cannot span the song",
+            "the scenes do not match the music theme: they must depict the lyrics' protagonist and story arc as a coherent multi-scene progression",
+            "the locked protagonist identity or the selected ratio is violated"
+          ],
+          "on_fail": "Append an entry to RUNTIME_STATE.json error_history (support_investigation.error_history_entry_shape extended with agent, attempt, designs_returned, design_ids; symptom = the exact on-screen error message or 'single_image' | 'theme_mismatch' | 'identity_violation' | 'count_below_viable_floor') so the failure can be debugged later. Abandon the failed batch: never import it and never mix its designs with another attempt. Then retry per agent_priority.",
+          "on_pass": "Set N to the verified batch count, record scene IDs in ascending page_number order, and continue to VideoExpress import.",
+          "mouth_pose_never_fails_an_attempt": "v2.5.0: mouth pose, open mouths, visible teeth and smiles are NEVER a fail condition and never consume the retry budget. Montage QC records the affected scene numbers in open_mouth_flagged_scenes and moves on. Two live runs proved the loop is unwinnable - the Nursery Rhymes house style is open-mouthed on virtually every still, so a regenerated board fails identically while burning image quota."
+        },
+        "image_dimension": "16:9",
+        "storyboard_selection": "all_completed_verified_scenes",
+        "target_scene_count": "runtime.artistly.storyboard_scene_count",
+        "character_lock_prompt": "Only used with the Music Storyboard fallback (after 3 failed validated Nursery Rhymes attempts). Example: '3D children's animation; <name> a <age> GIRL, <eyes>, <hair>, <clothing>; always a girl, never a boy; mouth closed, closed-lip smile, never singing or talking'. Keep it under the field's character limit (Music Storyboard ~150 chars); if it will not fit, drop optional identity detail (eye colour, footwear) before dropping the no-speech clause. Nursery Rhymes has no such field, so with that agent the no-speech rule can only be applied at the video stage."
+      },
+      "videoexpress": {
+        "animation_style": "3D",
+        "animation_style_note": "Never select 'human' for a character montage; that path biases toward talking-head motion.",
+        "automatically_enhance_video_prompt": false,
+        "automatically_enhance_video_prompt_note": "v2.4.0: MUST stay false - the enhancer rewrites the submitted prompt server-side and can strip or dilute the no-speech language. Assert any enhance toggle is unchecked before every submission.",
+        "no_speech_prompt_suffix": " Mouth closed and lips together for the entire clip. The character never speaks, sings, talks, mouths words, chants, or opens the mouth; no lip movement, no jaw movement, no visible teeth, no dialogue, no singing, no lip sync. Emotion is expressed only through the eyes, eyebrows, head turns, hands, and body movement. A gentle closed-lip smile is allowed.",
+        "no_speech_prompt_suffix_short": "mouth closed, closed-lip smile, never singing or talking",
+        "no_speech_prompt_prefix": "Narration-style scene with no lip-sync: the character never speaks or mouths any words, and the lips stay gently closed the entire time. ",
+        "mouth_close_opening": "In the first moments the character softly closes the mouth into a gentle closed-lip smile and keeps it closed for the rest of the clip. ",
+        "mouth_close_opening_rule": "Insert after the prefix ONLY for scenes whose source still was flagged open-mouth in storyboard QC - you cannot keep closed what starts open, so instruct an immediate gentle close instead.",
+        "no_speech_prompt_tail": " No lip-sync or mouth movement.",
+        "no_speech_prompt_tail_rule": "v2.5.0 user-specified closer (supersedes v2.4.1 'No Mouth Movement or lip-sync'): appended verbatim as the literal LAST sentence of every video prompt, after no_speech_prompt_suffix. Assert the textarea ENDS WITH 'No lip-sync or mouth movement' before clicking Create Video; abort the submission if it does not.",
+        "speech_trigger_sanitizer": {
+          "singing|sings|sing|humming|chanting|chants": "dancing / swaying (pick the fitting form)",
+          "talking|speaking|chatting": "looking at each other",
+          "laughing|giggling|giggles": "smiling",
+          "cheering|shouting|yelling": "waving excitedly",
+          "calls out|calling out": "waves",
+          "grinning|grins|grin|beaming": "with a gentle closed-lip smile",
+          "huge, bright smile|big smile|wide smile|open-mouthed smile": "gentle closed-lip smile",
+          "mouth open|open mouth|open-mouthed": "mouth closed"
+        },
+        "no_trigger_regex": "\\b(sing(s|ing)?|sang|talk(s|ing)?|speak(s|ing)?|chat(s|ting)?|shout(s|ing)?|chant(s|ing)?|laugh(s|ing)?|giggl(e|es|ing)|cheer(s|ing)?|yell(s|ing)?|grin(s|ning)?)\\b|open[- ]?mouth|mouth open|wide smile|big smile",
+        "no_trigger_regex_rule": "Applied to the SANITIZED BASE TEXT ONLY (the suffix itself legitimately contains these words as negations). Zero matches required or the submission is aborted.",
+        "open_mouth_still_policy": "RECORD-ONLY (v2.4.2): flag affected scenes into RUNTIME_STATE.json open_mouth_flagged_scenes - store only the affected scene numbers, never the whole board. NEVER fail or regenerate a storyboard attempt for mouth pose (the old ceil(0.10*N) fail threshold caused endless regenerations because the agent's house style is open-mouth on virtually every still). The mouth is closed at the video stage via mouth_close_opening + per-clip mouth QC.",
+        "mouth_motion_qc_scope": "every_clip_no_sampling",
+        "video_length_booster_policy": "preserve_dynamic_scene_count_N_and_use_boosted_versions_only_as_same-slot_replacements",
+        "maximum_concurrent_generations": 5,
+        "batch_size_policy": "maximum_5_distinct_generations_per_batch",
+        "batch_submission_barrier": "submit_all_current_batch_members_before_waiting_for_completion",
+        "next_batch_barrier": "all_current_batch_jobs_completed_and_verified",
+        "duration_matching_batch_size": 5,
+        "duration_match_tolerance_timeline_pixels": 0,
+        "no_speech_prompt_prefix_rule": "v2.5.0: leads with the POSITIVE frame ('narration-style scene with no lip-sync') because the generator follows positive framing more reliably than bare negation."
+      },
+      "export": {
+        "file_name": "{{EXPORT_FILE_NAME}}",
+        "quality": "High",
+        "resolution": "FullHD",
+        "format": "mp4"
+      }
+    },
+    "input_requirements": {
+      "project_name": {
+        "required": true
+      },
+      "video_ratio": {
+        "required": true,
+        "allowed_values": [
+          "Landscape"
+        ],
+        "mapping": {
+          "Landscape": "16:9"
+        },
+        "reason": "The Artistly Nursery Rhymes storyboard and the VideoExpress project must use one consistent horizontal YouTube ratio."
+      },
+      "audio": {
+        "required_fields": [
+          "song_idea",
+          "style",
+          "language",
+          "music_name",
+          "download_directory"
+        ],
+        "allowed_languages": [
+          "English"
+        ],
+        "song_idea_maximum_characters": 3000,
+        "style_format": "comma-separated descriptive music tags"
+      },
+      "export": {
+        "required_fields": [
+          "file_name",
+          "quality",
+          "resolution",
+          "format"
+        ]
+      }
+    },
+    "prerequisites": {
+      "accounts_connected_before_run": true,
+      "skip_api_setup_steps": true,
+      "required_connections": [
+        "CloneVoice API key is saved in Artistly",
+        "CloneVoice API key is saved in VideoExpress",
+        "Artistly API key is saved in VideoExpress"
+      ],
+      "required_features": [
+        "CloneVoice New music workflow",
+        "Artistly AI Design Agents Nursery Rhymes",
+        "VideoExpress Import from Artistly",
+        "VideoExpress Import from CloneVoice.ai",
+        "VideoExpress Image to Video"
+      ],
+      "validation_rule": "Inspect the relevant integration fields or import dialogs only when an expected connected feature is missing. Never regenerate or replace an API key during this workflow."
+    },
+    "clonevoice": {
+      "create_url": "https://app.clonevoice.ai/music/create",
+      "mode": "New",
+      "lyrics_mode": "AI-Generated",
+      "song_idea_source": "inputs.audio.song_idea",
+      "style_source": "inputs.audio.style",
+      "language_source": "inputs.audio.language",
+      "music_name_source": "inputs.audio.music_name",
+      "accept_terms_before_lyrics": true,
+      "lyrics_submit_button": "Generate Lyrics",
+      "lyrics_success_page": "Lyric Preview",
+      "accept_terms_before_music": true,
+      "music_submit_button": "Generate Music",
+      "completion_page": "My Audio",
+      "completion_status": "Completed",
+      "download_for_artistly": true,
+      "download_rule": "Download exactly the completed track whose title matches inputs.audio.music_name and record its absolute local path.",
+      "videoexpress_transfer_rule": "Do not upload the downloaded copy into VideoExpress. Import the same completed title through VideoExpress's synchronized CloneVoice library."
+    },
+    "artistly": {
+      "start_url": "https://app.artistly.ai/choose-designer",
+      "designer": "Fast AI Image Designer",
+      "section": "AI Design Agents",
+      "agent": "Nursery Rhymes",
+      "agent_priority_source": "inputs.artistly.agent_priority",
+      "agent_fallback": "Music Storyboard (LOW priority; only after 3 failed validated Nursery Rhymes attempts, each logged in error_history; the fallback itself also gets up to 3 validated attempts)",
+      "attempt_validation_source": "inputs.artistly.storyboard_attempt_validation",
+      "audio_upload_source": "runtime.clonevoice_downloaded_audio_path",
+      "storyboard_style_prompt_source": "inputs.artistly.character_lock_prompt (Music Storyboard fallback only)",
+      "image_dimension_source": "inputs.artistly.image_dimension",
+      "generate_button": "Generate Images",
+      "output": "ordered_consistent_character_storyboard",
+      "scene_requirements": [
+        "the batch is a full multi-scene storyboard that matches the music theme (never a single image)",
+        "scene processing is completed",
+        "scene image is visible",
+        "scene number or generated ordering is available",
+        "the protagonist is visibly a girl in every selected scene",
+        "the protagonist retains every locked identity attribute (hair, eyes, clothing, medium) from the production brief",
+        "consistent main character appearance",
+        "no malformed faces or hands",
+        "no unwanted text, logos, or watermarks"
+      ],
+      "bulk_download_storyboard": false,
+      "videoexpress_transfer_method": "direct Artistly integration"
+    },
+    "videoexpress": {
+      "start_url": "https://app.videoexpress.ai/",
+      "artistly_import": {
+        "open_button": "Import Media Text to Speech",
+        "action": "Import from Artistly",
+        "selection_source": "all N completed and visually verified Music Storyboard scenes",
+        "submit_button": "Import",
+        "expected_folder": "My Artistly Images",
+        "preserve_scene_order": true
+      },
+      "image_to_video": {
+        "open_path": [
+          "Create with AI",
+          "Image To Video (Old Algorithm)"
+        ],
+        "source_folder": "My Artistly Images",
+        "selection_order": "ascending Artistly storyboard scene order",
+        "animation_style_source": "inputs.videoexpress.animation_style",
+        "use_artistly_generated_video_prompt": true,
+        "append_no_speech_suffix": true,
+        "no_speech_suffix_source": "inputs.videoexpress.no_speech_prompt_suffix",
+        "prepend_no_speech_prefix": true,
+        "no_speech_prefix_source": "inputs.videoexpress.no_speech_prompt_prefix",
+        "sanitizer_source": "inputs.videoexpress.speech_trigger_sanitizer",
+        "no_trigger_regex_source": "inputs.videoexpress.no_trigger_regex",
+        "mouth_close_opening_source": "inputs.videoexpress.mouth_close_opening (only for scenes flagged open-mouth in storyboard QC)",
+        "append_no_speech_tail": true,
+        "no_speech_tail_source": "inputs.videoexpress.no_speech_prompt_tail",
+        "prompt_composition_rule": "v2.4.0 STRICT order - sanitize, prepend, append, assert: (1) take the auto-filled Artistly action prompt as the base (it carries the scene action and the protagonist's pronouns - never discard it outside mouth-QC retry 2); (2) run speech_trigger_sanitizer over the base so no vocal or open-mouth trigger word survives - a generator follows 'singing'/'laughing' over any negation, so triggers must be REMOVED, not merely contradicted; (3) assert no_trigger_regex finds nothing in the sanitized base, abort if it does; (4) compose full = no_speech_prompt_prefix + (mouth_close_opening if this scene's still is open-mouth-flagged) + base + no_speech_prompt_suffix + no_speech_prompt_tail; (5) set the value with the native value setter plus input/change events, idempotently (skip if the field already starts with the prefix); (6) re-read the textarea and assert it starts with the prefix, contains the suffix, and ENDS WITH the tail phrase 'No lip-sync or mouth movement' before clicking Create Video - abort the submission if any of the three is missing.",
+        "automatically_enhance_video_prompt_source": "inputs.videoexpress.automatically_enhance_video_prompt",
+        "lip_sync": false,
+        "lip_sync_enforcement": "Lip sync stays off for every generation without exception; if the modal exposes a lip-sync toggle, assert it is unchecked before submitting. Never use the Lipsync Video tool in this workflow.",
+        "mouth_motion_qc": "v2.5.0 BOUNDED - every clip checked, repairs capped at ONE per scene so QC can never become its own regeneration loop. (1) Check every completed clip in the batch (max 5) by FRAME SAMPLING: load mediaPath in a <video crossOrigin=anonymous>, seek to ~6 points across the clip (0.2/0.9/1.6/2.3/3.0/3.7s), draw each frame to a canvas cropped to the face, tile and screenshot once - this covers the whole clip in seconds; full-length playback is optional, never required. (2) Record mouth_qc_verdicts_by_scene {scene_k: pass|fail|fail_shipped} in RUNTIME_STATE.json; the no_speech_gate requires a verdict for all N scenes. (3) Reject only rhythmic lip parting or a jaw opening and shutting as if speaking/singing. Head, hand, body, hair and background motion is fine. Explicit PASS: a flagged-source clip that closes its mouth early and stays closed, AND a clip holding a STATIC open or half-open expression that never articulates - a still grin is not lip-sync and chasing it wastes generations. (4) ONE repair attempt per scene only: regenerate in the scene's own slot from the same source image, enhancement off, action text replaced by a minimal neutral description (subject + one non-vocal movement + setting) wrapped in prefix + mouth_close_opening + suffix + tail. Going straight to neutral text is deliberate - re-running the same wording rarely changes the outcome. (5) Then STOP: keep the better take, record fail_shipped + an error_history entry, name the scene in the final report. Never a third generation for a scene, never restart the batch, and NEVER regenerate the Artistly storyboard over lip movement.",
+        "video_length_booster_source": "inputs.videoexpress.video_length_booster_policy",
+        "submit_button": "Create Video",
+        "maximum_concurrent_generations_source": "inputs.videoexpress.maximum_concurrent_generations",
+        "batch_execution_policy": "Partition all N scenes into consecutive batches of at most five. For each batch, submit every distinct member first, verifying that each job is accepted in My AI Videos. The all-access plan permits at most five concurrent jobs, so never submit a sixth active generation. After all accepted jobs in the current batch complete, add that completed batch in storyboard order; only then begin the next batch.",
+        "expected_output_folder": "My AI Videos",
+        "mouth_is_a_video_stage_concern_only": "v2.5.0 HARD RULE: mouth and lip behaviour is corrected HERE and only here. Never regenerate, re-run or retry an Artistly storyboard because of mouth pose, open mouths, visible teeth or smiles - at any count, even if every still is open-mouthed. If clips still show lip movement, strengthen this video prompt and re-generate THAT CLIP via the mouth-QC repair path; never produce another board."
+      },
+      "timeline": {
+        "video_source_folder": "My AI Videos",
+        "video_add_method": "jquery_ui_drag_append_to_video_track_row_0",
+        "video_add_method_note": "VERIFIED: synthetic right-click 'Add to Timeline' menu clicks do NOT register. Use jQuery-UI drag (execution_mechanics.interaction_primitives.jquery_ui_drag): drop each clip past the last clip's right edge; the droppable auto-appends contiguously. Zoom out first so drops stay on-screen.",
+        "video_order": "ascending storyboard scene order",
+        "video_delete_method": "$(brick).trigger('ctxmenu:delete')",
+        "audio_source_folder": "My CloneVoice.ai Audio",
+        "audio_add_method": "jquery_ui_drag_to_audio_track_row_1_at_left_0",
+        "audio_placement_rule": "Drag the exact imported music item from My CloneVoice.ai Audio directly onto the lower timeline track at 00:00:00. Do not use Add to Timeline when it places audio on the video track or appends it after existing media.",
+        "audio_target_track": "lower_audio_track",
+        "audio_start_time": "00:00:00",
+        "audio_cleanup_rule": "Before placing music, remove only duplicate or misplaced audio bricks. Never delete, move, trim, or replace a video brick during audio cleanup.",
+        "sync_policy": "Let N equal the number of completed, visually verified Artistly designs for this run. The timeline must contain exactly N ordered video clips and its endpoint must exactly match the music endpoint. Each scene has exactly one normal-or-boosted clip in its own slot; a boosted result replaces, never duplicates, the normal result.",
+        "project_save_name_source": "inputs.project_name"
+      },
+      "duration_matching": {
+        "enabled": true,
+        "target_endpoint": "audio_clip_end_on_track_2",
+        "measurement_rule": "Record audio and video endpoints using authoritative timeline geometry. Calculate endpoint as left plus width for the final brick on each track; do not rely only on rounded labels or visual approximation.",
+        "shortage_rule": "First generate exactly one normal clip for every one of the N storyboard scenes. After placing all N clips, measure exact audio and video endpoints. If video is short, calculate the shortage and regenerate only enough suitable scenes with Video Length Booster to close it; each boosted result replaces its normal source clip in the same slot. If the final replacement overshoots, resize only that replacement's right edge.",
+        "generation_batch_size": 5,
+        "batch_barrier": "Submit at most five boosted generations, wait until every submitted item in that batch is completed in My AI Videos, then add the needed completed clips before starting another batch.",
+        "preserve_original_video_clips": false,
+        "replacement_rule": "A boosted result and its normal result represent one storyboard scene. Place exactly one of them in that scene's original sequential slot. If the boosted result is used, remove or omit only that scene's normal result; do not disturb neighboring clips.",
+        "placement_rule": "Assemble exactly N slots in ascending Artistly storyboard order. Every design contributes one clip. Never append a boosted duplicate as scene N+1 or later.",
+        "overshoot_rule": "If the final boosted replacement extends beyond the audio, resize only its right edge until the final video endpoint exactly equals the audio endpoint. Do not delete a storyboard scene, add a duplicate, or modify the audio.",
+        "integrity_rule": "After every placement or resize, sort video bricks by timeline left position and require the first start to be zero, every next start to equal the previous end, no gaps, no overlaps, and the final video endpoint to equal the audio endpoint.",
+        "completion_rule": "Require exactly N video bricks representing all N verified Artistly designs, exactly one normal-or-boosted version per scene, one audio brick on track 2 starting at zero, equal audio and video endpoints with zero-pixel tolerance, and a successful project save."
+      },
+      "clonevoice_import": {
+        "open_button": "Import Media Text to Speech",
+        "action": "Import from CloneVoice.ai",
+        "media_type": "Music",
+        "music_title_source": "inputs.audio.music_name",
+        "submit_button": "Import Selected",
+        "expected_confirmation_contains": "successfully saved",
+        "expected_folder": "My CloneVoice.ai Audio"
+      }
+    },
+    "export": {
+      "enabled": true,
+      "open_button": "Export Video",
+      "file_name_source": "inputs.export.file_name",
+      "default_file_name_fallback": "inputs.audio.music_name",
+      "quality_source": "inputs.export.quality",
+      "resolution_source": "inputs.export.resolution",
+      "format_source": "inputs.export.format",
+      "submit_button": "Create",
+      "submit_button_selector": "button.button-submit",
+      "submit_via": "native_mouse_sequence_or_jquery_trigger_once",
+      "expected_confirmation_contains": "Your movie creation is currently number",
+      "expected_confirmation_full": "Your movie creation is currently number <N> in the queue. This process will take place in the background.",
+      "confirmation_check": "search document.body.innerText for the phrase; this is the terminal completion signal",
+      "render_mode": "background_queue"
+    },
+    "dom_api_contract": {
+      "note": "Numeric folder categoryIds and media/design ids are PER-ACCOUNT. Example values in *_example fields are from a prior successful run; discover current values from the network log. Selectors are text/name/class/data-ident based and device-agnostic.",
+      "read_apis": {
+        "clonevoice_audio_record": {
+          "method": "read Inertia page data (no fetch needed)",
+          "source": "JSON.parse(document.getElementById('app').dataset.page).props",
+          "match_by": "uuid",
+          "fields": [
+            "src (public CDN mp3 url)",
+            "length (seconds)",
+            "title",
+            "status",
+            "uuid"
+          ]
+        },
+        "artistly_designs": {
+          "url": "GET /api/internal/designs?folder_id=all",
+          "shape": "array",
+          "fields": [
+            "id",
+            "uuid",
+            "images[0] (url)",
+            "status(processing->private)",
+            "tool_used",
+            "created_at",
+            "selection_group_id",
+            "aspect_ratio",
+            "width",
+            "height",
+            "page_number"
+          ],
+          "batch_identity": "tool_used ('AI Design Agents' for Nursery Rhymes; 'Music Storyboard') AND created_at cluster within a few seconds",
+          "story_order": "ascending page_number"
+        },
+        "videoexpress_folder_media": {
+          "url": "GET /api/library/get_media/4?categoryId=<FOLDER_ID>&page=1&start=0&limit=50&orderBy=id&orderDir=desc&filter=<image|>",
+          "response": "{ total, results: [ { id, name, title, status, duration(ms) } ] }",
+          "folder_categoryId_examples": {
+            "my_artistly_images_example": "376019 (use filter=image)",
+            "my_ai_videos_example": "54109",
+            "my_clonevoice_ai_audio_example": "552829"
+          }
+        },
+        "videoexpress_outputs_list": {
+          "url": "GET /api/get_list_output",
+          "note": "completed/queued export movies"
+        }
+      },
+      "clonevoice": {
+        "url": "https://app.clonevoice.ai/music/create",
+        "mode_toggle_text": [
+          "New",
+          "Old"
+        ],
+        "lyrics_toggle_text": [
+          "AI-Generated",
+          "Your Lyrics"
+        ],
+        "theme_textarea_placeholder": "What's your song about?",
+        "style_chip_example": "Kids-Rhymes (clicking it auto-fills a rich style string)",
+        "language_default": "English",
+        "tos_checkbox": true,
+        "buttons": [
+          "Generate Lyrics",
+          "Generate Music"
+        ],
+        "music_name_input_on": "Lyric Preview",
+        "completion_page_url": "/audio",
+        "status_flow": "Processing -> Completed",
+        "model_version_for_New": "V3"
+      },
+      "artistly": {
+        "url": "https://app.artistly.ai/choose-designer",
+        "path": [
+          "Fast AI Image Designer",
+          "AI Design Agents tab",
+          "agent tile"
+        ],
+        "agents": {
+          "nursery_rhymes": {
+            "controls": [
+              "Upload Your Rhyme Audio (FilePond)",
+              "Select Image Dimension dropdown",
+              "Generate Images button"
+            ],
+            "has_character_prompt_field": false,
+            "identity_source": "the uploaded rhyme audio lyrics (must already be identity-consistent)",
+            "dimension_default": "1:1 -> MUST change to selected ratio (16:9 = '16:9 (1344 x 768)')"
+          },
+          "music_storyboard": {
+            "controls": [
+              "Upload Your Audio",
+              "Storyboard Style textarea (character-lock prompt)",
+              "dimension dropdown",
+              "Generate Images"
+            ],
+            "has_character_prompt_field": true
+          }
+        },
+        "filepond_input_selector": "input[type=file][name=\"filepond\"]",
+        "designs_api": "GET /api/internal/designs?folder_id=all"
+      },
+      "videoexpress": {
+        "url": "https://app.videoexpress.ai/",
+        "save_caret_menu_items": [
+          "New",
+          "Open",
+          "Save Project As",
+          "Export Project"
+        ],
+        "new_project_ratio_picker_text": [
+          "Landscape 16:9",
+          "Vertical 9:16"
+        ],
+        "canvas_ratio_check": "document.querySelector('canvas') rect width/height ~= 1.777 for 16:9, ~= 0.5625 for 9:16",
+        "sidebar_tabs_are_anchor_links": [
+          "Media Library",
+          "Create with AI",
+          "Import Media Text to Speech",
+          "Text Animations",
+          "Filters",
+          "Fast Cut",
+          "Automatic Captions",
+          "Audio Cutter"
+        ],
+        "sidebar_click_note": "click the <a> link element that has a child, not its label span",
+        "import_card_selector": ".panel.cursor-pointer (match by text: 'Import from Artistly' / 'Import from CloneVoice.ai')",
+        "library_item_selector": ".library-item[data-ident] inside .col-xs-6.item; data-image=url, title=prompt; click to toggle 'selected'; 'More' button paginates ~20/page",
+        "import_submit_buttons": {
+          "artistly": "Import",
+          "clonevoice_music": "button.button-import ('Import Selected', jQuery-trigger)"
+        },
+        "image_to_video_old_algorithm": {
+          "open_path": [
+            "Create with AI tab",
+            "card text 'Image To Video' + 'Old Algorithm'"
+          ],
+          "picker": [
+            "'select' link (first) or 'Choose Image' button (subsequent)",
+            "open 'My Artistly Images' folder",
+            "click .library-item[data-ident]",
+            "'Choose' button"
+          ],
+          "prompt_autofills_from_image_title": true,
+          "prompt_must_end_with": "No lip-sync or mouth movement",
+          "style_select": "select[name=\"select-type\"] value '3d' (options Human/2D/3D/PhotoRealistic/Other; the dropdown DEFAULTS to Human - explicitly set '3d' and dispatch change for every submission)",
+          "booster_checkbox": "input[name=\"video_length_booster\"]",
+          "submit_button": "Create Video",
+          "durations_ms": {
+            "normal": 4041.667,
+            "boosted": 8041.667
+          },
+          "modal_stays_open_between_submissions": true
+        },
+        "timeline": {
+          "rows": ".tracks-wrapper .track-row (0=video track1, 1=audio track2, 2=track3)",
+          "clips": ".brick.video / .brick.audio with inline style.left/style.width (px)",
+          "clip_jquery_events": [
+            "ctxmenu:delete",
+            "ctxmenu:resize_move",
+            "ctxmenu:filters",
+            "ctxmenu:edit"
+          ],
+          "zoom_out_button": "button:has(i.bi-zoom-out)",
+          "zoom_in_button": "button:has(i.bi-zoom-in)",
+          "cut_tool_button": "button:has(i.bi-scissors)",
+          "auto_align_link_title": "Auto Align Clips",
+          "playhead_slider": ".timeline-header .ruler.ui-slider ($(r).slider('value') in px)",
+          "add_clip_method": "jquery_ui_drag (append past last clip right edge; NOT synthetic context-menu click)",
+          "delete_clip_method": "$(brick).trigger('ctxmenu:delete')",
+          "exact_trim_method": "playhead_slider_set + cut + tail ctxmenu:delete"
+        },
+        "save_dialog": {
+          "name_input": "input[name=\"project_name\"]",
+          "submit": "button.button-submit",
+          "success_signal": "document.title == 'Video Express - <name>'"
+        },
+        "export_dialog": {
+          "name_input": "input[name=\"name\"]",
+          "quality_select": "select[name=\"quality\"] value 'high'",
+          "size_select": "select[name=\"size\"] FullHD=value '1080', HD=value '720'",
+          "format_select": "select[name=\"format\"] value 'mp4'",
+          "submit": "button.button-submit ('Create', once)",
+          "queue_confirmation_text": "Your movie creation is currently number <N> in the queue"
+        }
+      },
+      "booster_math": {
+        "normal_clip_ms": 4041.667,
+        "boosted_clip_ms": 8041.667,
+        "boosted_adds_seconds": 4.0,
+        "K_boosted_clips_formula": "K = ceil((audio_seconds - 4.0417*N) / 4.0)",
+        "placement_strategy": "DISTRIBUTE the K boosted clips EVENLY across scenes 1..N so each clip's cumulative end-time tracks k*(A/N); this keeps the picture synced to the lyrics. Plan the boost set up front (A and N are known before generation) with the running-total rule: walk scenes 1..N, if running_total is behind k*(A/N) make the next clip boosted else normal, until exactly K are boosted. Generate each scene with its planned booster flag and place all N in story order.",
+        "do_not": "Do NOT cluster boosted clips at the end ('boost the last K'). It keeps endpoints equal but DESYNCS the first half (short clips front-load, so visuals run seconds ahead of the lyrics until re-converging at the end). Verified failure: N=22,K=10 clustered => up to ~19s ahead mid-song.",
+        "per_scene_sync_audit": "after assembly require |clip_end_time - k*(A/N)| <= ~one normal clip length (~4s) for every scene k; larger drift means uneven schedule, re-plan",
+        "overshoot": "exact-trim the last clip via playhead+cut to reach 0-pixel diff; never undershoot (video cannot be lengthened by resize)"
+      }
+    },
+    "validation_checkpoints": {
+      "purpose": "Human-readable, ID-based, per-gate checkpoints written into RUNTIME_STATE.json so a run is fully resumable and any support ticket is diagnosable without rerunning earlier phases.",
+      "checkpoint_object_shape": {
+        "gate": "string",
+        "status": "pass|fail|pending",
+        "evidence": "string",
+        "method": "api|dom|document_title|screenshot",
+        "timestamp": "ISO",
+        "artifact_ids": [
+          "…"
+        ]
+      },
+      "gates": [
+        {
+          "gate": "auth",
+          "verify": "each app shows logged-in UI or returns API 200; a login page is a true blocker"
+        },
+        {
+          "gate": "clonevoice_gate",
+          "verify": "inertia props: title matches, status Completed, capture music_uuid, duration_s, src_url"
+        },
+        {
+          "gate": "identity_gate",
+          "verify": "lyrics identity-consistent (she/her/girl throughout) AND montage screenshot QC of all N designs — the image-consistency validation"
+        },
+        {
+          "gate": "storyboard_gate",
+          "verify": "designs API: tool_used+created_at batch, all status private, N counted, page_number->design_id recorded, aspect_ratio correct; attempt validation passed: full multi-scene storyboard matching the music theme (never a single image), N >= ceil(audio_seconds/8.0417); agent attempt history recorded (Nursery Rhymes HIGH priority <=3 attempts, then Music Storyboard LOW-priority fallback <=3 attempts) with every failed attempt logged in error_history; open-mouth stills recorded per affected scene in open_mouth_flagged_scenes (record-only, never an attempt-fail)"
+        },
+        {
+          "gate": "import_gate",
+          "verify": "My Artistly Images folder API contains exactly the N recorded designs; ordered VE image ids recorded; unrelated ids excluded"
+        },
+        {
+          "gate": "batch_submission_gate",
+          "verify": "each planned scene has a unique job id in My AI Videos; <=5 active"
+        },
+        {
+          "gate": "batch_completion_gate",
+          "verify": "all batch jobs status completed with expected duration_ms before timeline insertion / next batch"
+        },
+        {
+          "gate": "no_speech_gate",
+          "verify": "STRICT v2.4.1: every submitted prompt was composed no_speech_prompt_prefix + sanitized base (zero no_trigger_regex matches) + no_speech_prompt_suffix + no_speech_prompt_tail (the prompt literally ends with 'No lip-sync or mouth movement'), with mouth_close_opening included for every open-mouth-flagged scene, asserted in the textarea before Create Video; automatic prompt enhancement OFF and lip sync OFF for every generation; animation style '3d' (never 'human'); mouth_qc_verdicts_by_scene contains a recorded pass/fail verdict for ALL N scenes (every clip watched, no sampling); zero unreported talking clips - any 'fail_shipped' exception is listed by scene in the final report"
+        },
+        {
+          "gate": "timeline_gate",
+          "verify": "N .brick.video, first_start_px 0, contiguous (ignoring <=1px recurring render rounding), order verified"
+        },
+        {
+          "gate": "audio_gate",
+          "verify": "one .brick.audio on track 2 at left 0; ve_audio_id + duration_ms recorded"
+        },
+        {
+          "gate": "sync_gate",
+          "verify": "video_end_px == audio_end_px (0 diff) via .brick geometry"
+        },
+        {
+          "gate": "pacing_sync_gate",
+          "verify": "per-scene lyric sync: for every scene k, |clip_end_time - k*(audio_seconds/N)| <= ~4s; boosted clips distributed evenly, NOT clustered at the end"
+        },
+        {
+          "gate": "ratio_gate",
+          "verify": "canvas + every asset/clip + export orientation match selected ratio"
+        },
+        {
+          "gate": "save_gate",
+          "verify": "document.title == 'Video Express - <name>'"
+        },
+        {
+          "gate": "export_gate",
+          "verify": "on-page text 'Your movie creation is currently number <N> in the queue'"
+        }
+      ],
+      "runtime_state_must_be_human_readable": true
+    },
+    "support_investigation": {
+      "when": "a user reports the automation failed",
+      "procedure": [
+        "load RUNTIME_STATE.json",
+        "find the first gate whose status is not pass",
+        "read its evidence and the surrounding error_history entries",
+        "re-verify that gate live via the corresponding read_api in dom_api_contract (auth, folder contents, job status, endpoints, queue) — app state is authoritative",
+        "resume from that gate's next_safe_action using the idempotency rule; never repeat a verified side effect"
+      ],
+      "error_history_entry_shape": {
+        "when": "ISO",
+        "phase": "string",
+        "symptom": "string",
+        "root_cause": "string",
+        "recovery_action": "string",
+        "outcome": "string"
+      },
+      "common_incidents": {
+        "mcp_write_419": "MCP/API write returned 419 page-expired/CSRF; not a blocker; used authenticated browser DOM.",
+        "stacked_dialog": "duplicate modal from double-trigger; acted once, verified via title/queue text, closed duplicate.",
+        "offscreen_drop_failed": "timeline drop dropped off-screen; zoomed out then re-dragged.",
+        "stale_success_toast": "toast read 'success' from a prior job; verified real result via API/title instead.",
+        "wrong_agent_or_ratio": "Nursery Rhymes used with default 1:1; corrected dimension to selected ratio before generating.",
+        "nursery_rhymes_error_or_single_image": "Nursery Rhymes attempt returned an error or a single image instead of a full storyboard; logged the attempt in error_history, abandoned the batch, retried (maximum 3 validated attempts), then fell back to Music Storyboard (also maximum 3 validated attempts) with the character-lock prompt.",
+        "talking_lips_root_cause_2026_08_14": "Verified failed run (Bella): every sampled storyboard still had a wide-open toothy mouth, so Image-To-Video animated speech no matter what the appended suffix said - frame 0 wins. Compounding factors: vocal/open-mouth wording in the action prompts ('huge, bright smile'), automatic prompt enhancement enabled (can rewrite away the no-speech language), and sample-only clip QC. Fixed in v2.4.0: closed-mouth storyboard gate (>ceil(0.10*N) flagged stills fails the attempt), trigger-word sanitizer + prefix/opening/suffix composition, enhancement forced off, per-clip mouth QC with recorded verdicts. (v2.4.2: the storyboard mouth gate is demoted to record-only - live runs showed regeneration cannot beat the agent's open-mouth house style; affected scenes are recorded and closed at the video stage.)",
+        "jquery_ui_resize_no_op": "clip resize-handle drag ignored; used playhead+cut exact-trim instead.",
+        "first_half_out_of_sync_with_lyrics": "Root cause: boosted clips were clustered at the end ('boost the last K') so short clips front-loaded and the picture ran ahead of the lyrics through the first half (endpoints were still equal). Fix: distribute boosted clips evenly (booster_math.placement_strategy) so each clip's cumulative end tracks k*(A/N); re-plan and re-assemble if the pacing_sync_gate fails."
+      }
+    },
+    "workflow": [
+      {
+        "step": 1,
+        "phase": "validate",
+        "action": "load_or_initialize_runtime_state_and_validate",
+        "details": "First load RUNTIME_STATE.json when it exists. Reconnect to CloneVoice, Artistly, and VideoExpress without mutation, inspect their authoritative state, reconcile completed work, and resume from next_safe_action after last_verified_checkpoint. For a new run, initialize runtime state, require a project name, CloneVoice song idea, music style, music name, local download directory, and export file name, require Landscape mapped to 16:9, and confirm authenticated tabs or sessions are available. Persist the reconciled checkpoint before continuing."
+      },
+      {
+        "step": 2,
+        "phase": "validate",
+        "action": "validate_existing_integrations",
+        "details": "Confirm the linked features exist without exposing, copying, regenerating, or changing API keys. Skip all account-connection setup because prerequisites.accounts_connected_before_run is true."
+      },
+      {
+        "step": 3,
+        "phase": "clonevoice_music",
+        "action": "open_clonevoice_new_music",
+        "details": "Open clonevoice.create_url, select New, and select AI-Generated in the Lyrics section."
+      },
+      {
+        "step": 4,
+        "phase": "clonevoice_music",
+        "action": "fill_song_idea",
+        "details": "Enter inputs.audio.song_idea in the What's your song about field."
+      },
+      {
+        "step": 5,
+        "phase": "clonevoice_music",
+        "action": "fill_music_style",
+        "details": "Enter inputs.audio.style in the Style field. A preset button may be used only when it produces the requested style."
+      },
+      {
+        "step": 6,
+        "phase": "clonevoice_music",
+        "action": "select_language",
+        "details": "Select inputs.audio.language. English is the configured default."
+      },
+      {
+        "step": 7,
+        "phase": "clonevoice_music",
+        "action": "accept_lyrics_terms",
+        "details": "Check I have read and agreed to the terms of service for lyric generation."
+      },
+      {
+        "step": 8,
+        "phase": "clonevoice_music",
+        "action": "generate_lyrics",
+        "details": "Click Generate Lyrics and wait until Lyric Preview contains generated verse or chorus content."
+      },
+      {
+        "step": 9,
+        "phase": "clonevoice_music",
+        "action": "name_music",
+        "details": "Enter inputs.audio.music_name in Music Name."
+      },
+      {
+        "step": 10,
+        "phase": "clonevoice_music",
+        "action": "accept_music_terms",
+        "details": "Check I have read and agreed to the terms of service on Lyric Preview."
+      },
+      {
+        "step": 11,
+        "phase": "clonevoice_music",
+        "action": "generate_music",
+        "details": "Click Generate Music once. Wait on My Audio until the item with the exact configured music name has Status Completed, then record the CloneVoice audio ID."
+      },
+      {
+        "step": 12,
+        "phase": "clonevoice_music",
+        "action": "download_music_for_artistly",
+        "details": "Click Download only for the completed configured music item. Save it beneath inputs.audio.download_directory and record the absolute path as runtime.clonevoice_downloaded_audio_path."
+      },
+      {
+        "step": 13,
+        "phase": "artistly_storyboard",
+        "action": "open_storyboard_agent",
+        "details": "Open Artistly choose-designer, Fast AI Image Designer, AI Design Agents tab, then the agent chosen by inputs.artistly.agent_priority: ALWAYS Nursery Rhymes (HIGH priority) first; increment runtime.artistly.storyboard_attempt (1-based). Open Music Storyboard (LOW priority) only when error_history already records 3 failed validated Nursery Rhymes attempts for this run. Nursery Rhymes: only a rhyme-audio FilePond upload and a dimension dropdown that defaults to 1:1 and MUST be set to the selected ratio; identity comes from the lyrics (no character field). Music Storyboard: has a Storyboard Style character-lock textarea. Inject the audio via the FilePond DataTransfer method (execution_mechanics.interaction_primitives.file_upload_without_os_dialog); do not use an OS file dialog."
+      },
+      {
+        "step": 14,
+        "phase": "artistly_storyboard",
+        "action": "upload_rhyme_audio",
+        "details": "Upload runtime.clonevoice_downloaded_audio_path to Upload Your Rhyme Audio and verify the correct file name appears."
+      },
+      {
+        "step": 15,
+        "phase": "artistly_storyboard",
+        "action": "lock_character_and_select_storyboard_ratio",
+        "details": "Every attempt: set the image dimension to the selected ratio (Nursery Rhymes defaults to 1:1 and MUST be changed; 16:9 for Landscape). Music Storyboard fallback only: enter inputs.artistly.character_lock_prompt in Storyboard Style, explicitly requiring the locked protagonist identity (e.g. always a girl, never a boy). Never generate a mixed-ratio storyboard."
+      },
+      {
+        "step": 16,
+        "phase": "artistly_storyboard",
+        "action": "generate_storyboard",
+        "details": "Click Generate Images once for this attempt and continue polling while the storyboard scenes show Processing. Do not treat active processing as failure. If the app returns an explicit generation error instead, do not keep waiting: record the failed attempt (agent, attempt number, exact error message) in RUNTIME_STATE.json error_history and return to step 13 for the next attempt per inputs.artistly.agent_priority."
+      },
+      {
+        "step": 17,
+        "phase": "artistly_storyboard",
+        "action": "verify_storyboard",
+        "details": "Wait for generation to finish, identify this attempt's batch (designs API: tool_used + created_at cluster), load all pages, and run inputs.artistly.storyboard_attempt_validation: the batch must be a full multi-scene storyboard - exactly one image is the known Nursery Rhymes failure and always fails; require N >= ceil(audio_seconds/8.0417); visually verify the scenes match the music theme (the lyrics' protagonist and story arc), the locked identity, and the selected ratio. PASS: set N to the verified count and record all N scene IDs in ascending page_number story order; during montage QC also record (never fail on) open-mouth stills - write ONLY the affected scene numbers to open_mouth_flagged_scenes for the video stage (v2.4.2 record-only policy). FAIL: append {agent, attempt, symptom, designs_returned, design_ids} to RUNTIME_STATE.json error_history for later debugging, abandon the batch (never import or mix it), then retry Nursery Rhymes from step 13 while it has had fewer than 3 attempts; after the third Nursery Rhymes failure run steps 13-17 with Music Storyboard (LOW priority) and the character-lock prompt, also up to 3 validated attempts with the same validation and error_history logging; if Music Storyboard also fails 3 validated attempts, stop and report a true blocker with the error_history evidence."
+      },
+      {
+        "step": 18,
+        "phase": "videoexpress_import",
+        "action": "import_artistly_storyboard",
+        "details": "In VideoExpress open Import Media Text to Speech, choose Import from Artistly, load all pages with More, select all N recorded and visually verified Music Storyboard scenes, click Import, and verify those N scene IDs appear in My Artistly Images. Do not select older boy-character designs."
+      },
+      {
+        "step": 19,
+        "phase": "videoexpress_animation",
+        "action": "initialize_scene_loop",
+        "details": "Set current_scene_index to zero and target_timeline_scene_count to N. Generate one normal video for every scene first. Divide all N ordered scenes into batches of at most five and process only one batch at a time. Do not preselect a fixed number of boosted scenes before measuring the assembled N-clip timeline."
+      },
+      {
+        "step": 20,
+        "phase": "videoexpress_animation",
+        "action": "open_image_to_video_for_scene",
+        "details": "Open Create with AI, Image to Video, Select Image, My Artistly Images, and choose the image matching current_scene_index."
+      },
+      {
+        "step": 21,
+        "phase": "videoexpress_animation",
+        "action": "configure_scene_animation",
+        "details": "Compose the prompt per the strict v2.4.0 rule: sanitize the Artistly action prompt with speech_trigger_sanitizer, prepend no_speech_prompt_prefix (plus mouth_close_opening for open-mouth-flagged scenes), append no_speech_prompt_suffix, end with no_speech_prompt_tail ('No lip-sync or mouth movement'), and assert prefix + suffix + tail + zero trigger words in the textarea. Choose 3D, DISABLE automatic video-prompt enhancement (assert any enhance toggle is unchecked), and disable lip sync. During the primary N-scene pass keep Video Length Booster off. In the later duration-repair pass, enable it only for a recorded replacement scene."
+      },
+      {
+        "step": 22,
+        "phase": "videoexpress_animation",
+        "action": "submit_scene_video",
+        "details": "Click Create Video once for the current scene and immediately verify an authoritative processing or completed entry exists in My AI Videos. Record its generated-video ID. Continue submitting the remaining distinct scenes in the same batch until the batch has up to five accepted jobs. Never count only a generic success banner as an accepted job and never submit a sixth active generation."
+      },
+      {
+        "step": 23,
+        "phase": "videoexpress_animation",
+        "action": "advance_scene_loop",
+        "details": "Increment current_scene_index only after the current submission is verified in My AI Videos. Continue until every member of the planned batch, maximum five, is accepted. Then stop submitting and wait for the whole batch to finish; do not pull scenes from the next batch into unused or rejected slots."
+      },
+      {
+        "step": 24,
+        "phase": "videoexpress_timeline",
+        "action": "wait_for_current_batch",
+        "details": "Open Media Library and My AI Videos. First require every planned batch member to have one accepted job ID; then wait until all those jobs are fully generated. Do not start the next batch while any current-batch clip is missing, unverified, or processing."
+      },
+      {
+        "step": 25,
+        "phase": "videoexpress_timeline",
+        "action": "add_current_batch_in_order",
+        "details": "Map completed clips to storyboard order using recorded video IDs and each clip's title (the scene action prompt). Add exactly one clip per scene in ascending order via jQuery-UI drag onto video track-row 0 (NOT synthetic right-click). Zoom the timeline out first so drop points stay on-screen. After each drop read back .brick.video left/width to confirm a contiguous append. Optional pipeline: submit the next batch first, then arrange this batch while the next renders (never exceed 5 concurrent). After the final batch require total == N, then measure endpoints before deciding on boosted replacements."
+      },
+      {
+        "step": 26,
+        "phase": "videoexpress_audio",
+        "action": "import_music_from_clonevoice",
+        "details": "Open Import Media Text to Speech, choose Import from CloneVoice.ai, select Music, select the completed item matching inputs.audio.music_name exactly, and click Import Selected. Do not upload the locally downloaded Artistly transfer copy into VideoExpress."
+      },
+      {
+        "step": 27,
+        "phase": "videoexpress_audio",
+        "action": "add_music_to_timeline",
+        "details": "Open My CloneVoice.ai Audio (verify import via get_media API first — the copy is async ~5-10s), then jQuery-UI drag the exact named audio .library-item onto the audio track (track-row index 1) with its left edge at 0. Confirm exactly one .brick.audio at left:0px. Capture the audio brick width and the VE audio duration_ms as the authoritative audio_end. If audio landed on track 1 or duplicated, delete only the misplaced audio bricks (never a video brick) and drag one clean copy to track 2."
+      },
+      {
+        "step": 28,
+        "phase": "videoexpress_sync",
+        "action": "measure_exact_video_audio_endpoints",
+        "details": "Inspect the timeline after the music is on track 2. Record audio_end and video_end from authoritative timeline brick geometry using left plus width, record the rounded duration labels for reference, and calculate missing_duration = audio_end - video_end. Do not accept visually similar or rounded labels as an exact match."
+      },
+      {
+        "step": 29,
+        "phase": "videoexpress_sync",
+        "action": "plan_duration_booster_batch",
+        "details": "If video_end < audio_end, compute K = ceil((audio_seconds - 4.0417*N) / 4.0) boosted clips (dom_api_contract.booster_math). Choose K so total slightly EXCEEDS audio (then exact-trim); never undershoot. DISTRIBUTE the K boosted scenes EVENLY across 1..N with the running-total rule so each clip's cumulative end tracks k*(A/N) and the picture stays synced to the lyrics; NEVER cluster them at the end. Prefer planning the boost set up front (A and N known before generation) and placing each scene normal-or-boosted directly in its slot. If replacing on an existing all-normal timeline, replace each boost-set scene in its OWN slot (not the end). Record selected scene IDs, slots, normal video IDs, and prompts. Never change the total above N."
+      },
+      {
+        "step": 30,
+        "phase": "videoexpress_sync",
+        "action": "submit_duration_booster_batch",
+        "details": "For each selected scene open Create with AI, Image To Video (Old Algorithm), choose the exact image from My Artistly Images, use a scene-appropriate action prompt, select 3D, enable Video Length Booster, and click Create Video exactly once. Submit no more than five jobs in this duration-matching batch and checkpoint each submitted generated-video ID."
+      },
+      {
+        "step": 31,
+        "phase": "videoexpress_sync",
+        "action": "wait_for_duration_booster_batch",
+        "details": "Open Media Library and My AI Videos. Wait until every submitted boosted job in the current batch is complete. Treat visible processing percentages as active work, never resubmit a processing scene, and do not start another batch yet."
+      },
+      {
+        "step": 32,
+        "phase": "videoexpress_sync",
+        "action": "replace_originals_with_required_boosted_clips",
+        "details": "For each completed boosted result, locate its recorded normal source scene and slot. Replace only that normal clip with the boosted result at the same sequential position; ensure the original is absent and neighboring clips remain ordered. Keep the video clip count exactly N after every replacement."
+      },
+      {
+        "step": 33,
+        "phase": "videoexpress_sync",
+        "action": "trim_final_clip_to_audio_endpoint_via_playhead_cut",
+        "details": "When the assembled boosted timeline overshoots the music, perform the exact trim (execution_mechanics.exact_trim_method): set the ruler slider playhead value to audio_end_px and trigger slide/change; select the last video clip; trigger the Cut tool (bi-scissors) to split at the playhead; delete the tail brick via $(tail).trigger('ctxmenu:delete'). Re-measure until video_end_px == audio_end_px (0-pixel diff). Do NOT drag the clip's resize handle (jQuery-UI resizable ignores synthetic events). Keep exactly N video clips and never trim, move, or replace the track-2 music."
+      },
+      {
+        "step": 34,
+        "phase": "videoexpress_sync",
+        "action": "click_auto_align_clips",
+        "details": "As the final timeline-arrangement action, click the video track's Auto Align Clips control (a.button-auto-align[data-original-title='Auto Align Clips']) after all N video clips and the music are present. If track 2 exposes its own Auto Align Clips control, click it as well so the audio begins at zero. Then re-read brick left/width geometry; require both tracks to start at zero, disregard only the documented recurring 1px rendering round-off, and re-establish video_end_px == audio_end_px with zero-pixel tolerance before saving."
+      },
+      {
+        "step": 35,
+        "phase": "videoexpress_sync",
+        "action": "audit_exact_timeline_integrity",
+        "details": "Sort video bricks by timeline left position. Require exactly N video bricks, N distinct storyboard scene IDs, one version per scene, each boosted clip in its source slot, first start zero, no gaps or overlaps, one music brick on track 2 at zero, and video_end equal to audio_end with zero-pixel tolerance. ALSO run the per-scene sync audit: for every scene k require |clip_end_time - k*(audio_seconds/N)| <= ~one normal clip length (~4s); if any scene drifts more, the boosted clips are unevenly distributed (clustered) and the picture will run ahead of the lyrics -- re-plan the boost distribution before saving."
+      },
+      {
+        "step": 36,
+        "phase": "videoexpress_save",
+        "action": "save_project",
+        "details": "Save the editable VideoExpress project using inputs.project_name. Require the successful-save confirmation, reopen or re-inspect the authoritative timeline, and repeat the endpoint and integrity audit to prove the exact match persisted."
+      },
+      {
+        "step": 37,
+        "phase": "videoexpress_export",
+        "action": "configure_export",
+        "details": "Click Export Video, enter inputs.export.file_name or fall back to inputs.audio.music_name, and select the configured quality, resolution, and format."
+      },
+      {
+        "step": 38,
+        "phase": "videoexpress_export",
+        "action": "create_export",
+        "details": "Click Create exactly once and wait for the background rendering queue confirmation."
+      },
+      {
+        "step": 39,
+        "phase": "videoexpress_export",
+        "action": "verify_export_queue",
+        "details": "Require the confirmation that the movie is numbered in the queue and will be created in the background. Record the export name and queue position."
+      }
+    ],
+    "scene_loop": {
+      "collection": "runtime.artistly_storyboard_scenes",
+      "index_variable": "current_scene_index",
+      "maximum_concurrent_submissions": "inputs.videoexpress.maximum_concurrent_generations",
+      "batch_size": 5,
+      "partition_rule": "Partition the N ordered storyboard scenes as [1..5], [6..10], and so on; the final batch may contain 1-5 scenes.",
+      "submission_rule": "Submit every member of the current batch before waiting. Verify each submission by a unique processing or completed generated-video ID in My AI Videos. Maximum five active generations; never a sixth.",
+      "batch_barrier": "Do not submit any scene from the next batch until every planned job in the current batch is accepted, completed, verified, and the completed batch has been added to the timeline in order.",
+      "iteration_order": [
+        "select Artistly scene image",
+        "verify the auto-filled prompt matches the scene, then sanitize it and compose prefix + (mouth_close_opening if flagged) + base + suffix + tail ('No lip-sync or mouth movement')",
+        "select 3D style",
+        "assert automatic prompt enhancement is disabled",
+        "apply Video Length Booster only when this scene is planned as a boosted replacement",
+        "submit Create Video",
+        "record scene-to-video mapping"
+      ],
+      "after_loop": [
+        "for each batch open My AI Videos",
+        "wait for every clip in that batch to finish",
+        "map the batch clips to storyboard order",
+        "add the batch to the timeline in ascending order",
+        "verify the batch count and positions before submitting the next batch",
+        "after the final batch verify the complete scene count and order"
+      ]
+    },
+    "duration_matching_loop": {
+      "condition": "video_end_is_before_audio_end",
+      "batch_size": 5,
+      "checkpoint_fields": [
+        "duration_video_end_before_batch",
+        "duration_audio_end",
+        "duration_missing_before_batch",
+        "selected_source_scene_ids",
+        "submitted_boosted_video_ids",
+        "completed_boosted_video_ids",
+        "boosted_video_ids_added_to_timeline",
+        "original_video_clip_count",
+        "current_video_clip_count",
+        "last_added_boosted_video_id",
+        "duration_video_end_after_batch",
+        "next_safe_action"
+      ],
+      "iteration_order": [
+        "measure exact audio and video endpoints",
+        "select up to five suitable later storyboard scenes",
+        "submit each once through Image To Video (Old Algorithm) with 3D and Video Length Booster",
+        "wait for every submitted item in the batch to complete",
+        "replace each selected scene's normal clip with its completed boosted clip in the same slot",
+        "require exactly N clips and remeasure after every replacement",
+        "repeat with another batch only if a positive shortage remains"
+      ],
+      "exit_actions": [
+        "resize only the right edge of the final boosted replacement when necessary",
+        "require exact endpoint equality with zero-pixel tolerance",
+        "require no gaps or overlaps",
+        "require exactly one normal-or-boosted version for each of the N scene IDs",
+        "save and re-audit the persisted project"
+      ]
+    },
+    "workflow_summary": [
+      "validate authenticated sessions and existing account integrations",
+      "use CloneVoice New and AI-Generated to create the nursery-rhyme song",
+      "download the completed song only for Artistly's audio-upload step",
+      "upload the song to Artistly Nursery Rhymes (HIGH priority; up to 3 validated attempts, logging every failure to RUNTIME_STATE.json, then fall back to Music Storyboard, also up to 3 validated attempts, with the immutable character lock)",
+      "validate every attempt as a full on-theme storyboard (never a single image) and visually verify all N scenes with the locked identity consistent throughout",
+      "import all N verified storyboard images into VideoExpress through the Artistly integration",
+      "animate scenes through Image To Video (Old Algorithm) in batches of five",
+      "after each batch completes, assemble that batch sequentially before starting the next batch",
+      "import the completed song into VideoExpress through the CloneVoice integration",
+      "drag one music copy to the bottom timeline at zero and measure exact audio and video endpoints",
+      "when video is short, generate selected scenes with Video Length Booster in batches of five as replacements for their normal versions",
+      "keep exactly N clips, put each boosted result in its source slot, resize only the final boosted replacement, and require exact endpoint equality",
+      "save the editable project",
+      "export the final FullHD MP4 and verify background queue submission"
+    ],
+    "waits": {
+      "page_load_timeout_seconds": 30,
+      "lyrics_generation_timeout_seconds": 180,
+      "music_generation_soft_timeout_seconds": 600,
+      "music_download_timeout_seconds": 120,
+      "artistly_audio_upload_timeout_seconds": 120,
+      "storyboard_generation_soft_timeout_seconds": 1200,
+      "scene_video_generation_soft_timeout_seconds": 600,
+      "continue_while_loading_ui_visible": true,
+      "active_generation_hard_timeout_seconds": null,
+      "inactive_checks_required_before_blocking": 3,
+      "clonevoice_import_timeout_seconds": 120,
+      "save_project_timeout_seconds": 60,
+      "export_form_timeout_seconds": 30,
+      "export_queue_confirmation_timeout_seconds": 60,
+      "poll_interval_seconds": 10,
+      "progress_update_interval_seconds": 60
+    },
+    "verification": {
+      "authenticated_clonevoice": true,
+      "authenticated_artistly": true,
+      "authenticated_videoexpress": true,
+      "api_setup_skipped": true,
+      "clonevoice_mode_is_new": true,
+      "clonevoice_lyrics_mode_is_ai_generated": true,
+      "clonevoice_song_idea_matches_input": true,
+      "clonevoice_style_matches_input": true,
+      "clonevoice_language_matches_input": true,
+      "clonevoice_music_name_matches_input": true,
+      "clonevoice_music_completed": true,
+      "clonevoice_audio_downloaded_for_artistly": true,
+      "artistly_uploaded_audio_matches_clonevoice_item": true,
+      "artistly_image_dimension_is_16_9": true,
+      "artistly_storyboard_completed": true,
+      "artistly_storyboard_order_recorded": true,
+      "artistly_character_lock_prompt_recorded": true,
+      "artistly_protagonist_is_consistently_a_girl": true,
+      "artistly_selected_scene_count_equals_N": true,
+      "artistly_scenes_imported_to_videoexpress": true,
+      "videoexpress_scene_count_matches_storyboard": true,
+      "videoexpress_scene_order_matches_storyboard": true,
+      "all_scene_videos_completed": true,
+      "clonevoice_music_imported_through_integration": true,
+      "music_title_matches_input": true,
+      "music_is_on_lower_timeline_track": true,
+      "music_starts_at_zero": true,
+      "audio_video_lengths_compared": true,
+      "audio_video_duration_difference_recorded": true,
+      "duration_booster_jobs_completed": true,
+      "timeline_video_clip_count_equals_N": true,
+      "each_storyboard_scene_has_exactly_one_timeline_version": true,
+      "boosted_replacements_accounted_for": true,
+      "timeline_has_no_gaps": true,
+      "timeline_has_no_overlaps": true,
+      "video_endpoint_equals_audio_endpoint_exactly": true,
+      "duration_match_tolerance_timeline_pixels": 0,
+      "audio_video_sync_verified": true,
+      "project_saved": true,
+      "project_name_matches_input": true,
+      "export_file_name_matches_input": true,
+      "export_queue_confirmation_visible": true
+    },
+    "recovery": {
+      "workflow_interrupted_at_any_step": "Load RUNTIME_STATE.json, reopen the three applications without changing data, inspect the last recorded entity or batch, reconcile UI state with external_side_effects, and continue from next_safe_action. Never restart completed phases or repeat a generation, import, timeline insertion, save, or export until its absence is verified.",
+      "runtime_checkpoint_missing_after_known_progress": "Reconstruct state from exact song title, audio ID, storyboard scene IDs, generated video IDs, timeline order, project name, and export queue. Persist the reconstructed checkpoint before taking another external action.",
+      "authentication_required": "Stop on the affected app without changing accounts and ask the user to sign in.",
+      "integration_missing": "Stop without modifying API keys. Report the exact missing integration field or unavailable import action.",
+      "lyrics_generation_timeout": "Keep CloneVoice open, wait one additional soft-timeout period, and inspect for an explicit error before stopping.",
+      "music_generation_timeout": "Keep My Audio open and continue polling the exact named item while Processing remains visible.",
+      "music_download_blocked": "Keep the completed CloneVoice item open and request a manual download to inputs.audio.download_directory. Resume from the recorded absolute path without regenerating the song.",
+      "artistly_upload_failed": "Verify the local file exists and is a supported audio type, then retry the upload once. Never substitute a different track silently.",
+      "storyboard_generation_slow": "Continue polling while scene cards show Processing. Active generation is not a blocker and has no hard deadline.",
+      "unacceptable_storyboard_scene": "Regenerate before importing scenes. If the protagonist is a boy or violates the locked girl identity, reject the entire affected storyboard set; do not animate, silently omit, or rationalize the mismatch.",
+      "artistly_import_missing_scenes": "Compare imported images with recorded storyboard scene count and re-import only the missing scenes.",
+      "scene_video_still_processing": "Wait in My AI Videos. Never add a processing clip to the timeline.",
+      "scene_order_uncertain": "Resolve order from recorded scene numbers, prompts, thumbnails, and IDs before editing the timeline.",
+      "clonevoice_import_missing_music": "Verify the exact named CloneVoice item is Completed, reopen the importer, and select Music again.",
+      "audio_shorter_than_video": "Do not create silence automatically. Report the mismatch or intentionally trim the video only when the configured creative intent permits it.",
+      "audio_longer_than_video": "Keep exactly N scene slots. Generate selected scenes with Video Length Booster in batches of at most five, wait for each batch, replace only the matching normal versions in their original slots, and resize only the final boosted replacement to the exact audio endpoint. Never append duplicate scenes or shorten the music.",
+      "audio_misplaced_or_duplicated": "Delete only the misplaced or duplicate audio bricks. Do not delete any video clip. Drag one clean music copy from My CloneVoice.ai Audio to track 2 at 00:00:00.",
+      "video_scene_missing_after_audio_edit": "Restore the exact missing generated video from My AI Videos at its original sequential position. Do not remove, replace, or shift any other video clip.",
+      "timeline_verification_failed": "Do not save or export until missing, duplicate, out-of-order, or mismatched media is corrected.",
+      "export_confirmation_missing": "Do not click Create again. Inspect the export queue once before reporting failure."
+    },
+    "safety": {
+      "never_store_credentials_or_api_keys_in_this_file": true,
+      "never_regenerate_api_keys": true,
+      "never_change_existing_integrations": true,
+      "never_use_old_clonevoice_music_mode": true,
+      "never_use_your_lyrics_unless_explicitly_configured": true,
+      "never_generate_lyrics_without_song_idea_and_style": true,
+      "never_generate_music_without_music_name": true,
+      "never_download_an_audio_item_with_a_different_title": true,
+      "never_upload_an_unverified_local_audio_file": true,
+      "never_mix_landscape_and_vertical_assets": true,
+      "never_bulk_download_artistly_scenes_for_videoexpress": true,
+      "never_enable_lip_sync_for_the_music_montage": true,
+      "never_enable_automatic_video_prompt_enhancement": true,
+      "never_submit_a_video_prompt_without_the_no_speech_prefix_and_suffix": true,
+      "never_submit_a_video_prompt_that_does_not_end_with_no_mouth_movement_or_lip_sync": true,
+      "never_submit_a_base_prompt_containing_vocal_or_open_mouth_trigger_words": true,
+      "never_discard_the_auto_filled_action_prompt_sanitize_it_instead_except_mouth_qc_retry_2": true,
+      "never_fail_or_regenerate_a_storyboard_attempt_for_mouth_pose_record_affected_scenes_instead": true,
+      "never_animate_a_flagged_open_mouth_scene_without_mouth_close_opening_in_its_prompt": true,
+      "never_skip_the_per_clip_mouth_motion_qc": true,
+      "never_ship_a_talking_clip_without_error_history_and_final_report_entry": true,
+      "never_select_human_animation_style_for_a_character_montage": true,
+      "never_ship_a_clip_whose_character_visibly_talks_or_sings": true,
+      "never_add_processing_scene_videos_to_timeline": true,
+      "never_use_newest_sort_order_as_storyboard_order": true,
+      "never_import_a_clonevoice_item_with_a_different_title": true,
+      "never_upload_local_music_copy_to_videoexpress": true,
+      "never_cut_a_video_clip_when_trimming_music": true,
+      "never_delete_move_or_replace_video_clips_during_audio_cleanup": true,
+      "never_append_a_boosted_duplicate_after_the_N_scene_sequence": true,
+      "never_leave_both_normal_and_boosted_versions_of_one_scene_on_timeline": true,
+      "never_change_a_neighboring_scene_when_replacing_a_boosted_scene": true,
+      "never_accept_a_boy_protagonist_when_the_song_specifies_a_baker_girl": true,
+      "never_trim_music_to_hide_a_short_video": true,
+      "never_add_the_same_boosted_generated_video_twice": true,
+      "never_accept_rounded_duration_labels_as_exact_endpoint_proof": true,
+      "never_save_or_export_with_a_timeline_gap_or_overlap": true,
+      "never_leave_duplicate_music_bricks_on_the_timeline": true,
+      "never_place_music_on_the_video_track": true,
+      "never_delete_the_pre_cut_audio_segment": true,
+      "never_export_before_timeline_and_sync_verification": true,
+      "never_click_export_create_more_than_once_without_checking_queue": true,
+      "never_stop_only_because_generation_is_slow": true,
+      "never_send_final_response_while_generation_is_pending": true,
+      "never_restart_a_verified_phase_after_interruption": true,
+      "never_repeat_an_external_side_effect_without_reconciliation": true,
+      "never_discard_or_overwrite_a_newer_runtime_checkpoint": true,
+      "stop_if_captcha_or_authentication_is_required": true
+    },
+    "result": {
+      "report_fields": [
+        "run_id",
+        "resumed_from_checkpoint",
+        "last_verified_checkpoint",
+        "recovery_actions_taken",
+        "project_name",
+        "video_ratio",
+        "resolved_aspect_ratio",
+        "clonevoice_music_name",
+        "clonevoice_audio_id",
+        "clonevoice_music_status",
+        "clonevoice_downloaded_audio_path",
+        "artistly_uploaded_audio_name",
+        "artistly_storyboard_scene_count",
+        "artistly_storyboard_scene_ids_in_order",
+        "artistly_scenes_imported",
+        "videoexpress_scene_videos_submitted",
+        "videoexpress_scene_video_ids_in_order",
+        "open_mouth_flagged_scenes",
+        "mouth_qc_verdicts_by_scene",
+        "mouth_qc_exceptions",
+        "timeline_scene_count",
+        "timeline_scene_order_verified",
+        "clonevoice_import_status",
+        "clonevoice_import_confirmation",
+        "audio_added_to_timeline",
+        "audio_start_time",
+        "audio_end_time",
+        "final_video_duration",
+        "target_video_clip_count",
+        "final_video_clip_count",
+        "distinct_scene_count_after_sync",
+        "duration_booster_jobs_submitted",
+        "duration_booster_jobs_completed",
+        "boosted_video_ids_used_as_replacements",
+        "boosted_replacement_count",
+        "final_video_endpoint_timeline_pixels",
+        "final_audio_endpoint_timeline_pixels",
+        "duration_match_tolerance_timeline_pixels",
+        "timeline_has_no_gaps",
+        "timeline_has_no_overlaps",
+        "audio_video_duration_difference",
+        "audio_video_lengths_equal",
+        "audio_video_sync_verified",
+        "project_saved",
+        "export_file_name",
+        "export_quality",
+        "export_resolution",
+        "export_format",
+        "export_queue_position",
+        "export_queue_confirmation",
+        "failed_phase",
+        "failed_step",
+        "failure_reason"
+      ]
+    }
+  }
+}
